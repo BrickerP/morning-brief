@@ -1,0 +1,58 @@
+# Morning Brief config
+timezone = "Asia/Shanghai"
+city = "beijing"
+agent_bin = "agent"
+skip_synth = false
+synth_timeout_s = 300
+lock_ttl_s = 2700
+staleness_hours = 36
+notify_on_degraded = true
+notify_on_ready = false
+
+[[sources]]
+id = "dating"
+title = "北京活动"
+enabled = true
+schedule = "daily"
+parse_mode = "json"
+source_tz = "Asia/Shanghai"
+invocation = "fanout"
+categories = ["music", "drama", "commonweal", "salon", "exhibition", "film", "party", "sports", "comedy"]
+skill_script = "/Users/yupeng/.claude/skills/dating-time/scripts/fetch_douban.py"
+section_kind = "events"
+timeout_s = 180
+city = "beijing"
+when = "week"
+
+[[sources]]
+id = "ai_daily"
+title = "AI 行业日报"
+enabled = true
+parse_mode = "json"
+source_tz = "America/Los_Angeles"
+lookback_days = 3
+max_lookback_days = 7
+skill_script = "/Users/yupeng/.agents/skills/ai-daily/scripts/fetch_news.py"
+section_kind = "news"
+
+[[sources]]
+id = "fs_street"
+title = "Farnam Street"
+enabled = true
+parse_mode = "json"
+source_tz = "America/New_York"
+lookback_days = 7
+max_lookback_days = 21
+skill_script = "/Users/yupeng/.agents/skills/fs-street/scripts/fetch_blog.py"
+section_kind = "essay"
+
+[[sources]]
+id = "daily_read"
+title = "科技早读"
+enabled = true
+parse_mode = "json"
+source_tz = "UTC"
+lookback_days = 7
+skill_script = "/Users/yupeng/.agents/skills/daily-read/scripts/fetch_articles.py"
+section_kind = "digest"
+timeout_s = 180

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PKG="$ROOT/packages/morningbrief"
+if [[ -x "$PKG/.venv/bin/python" ]]; then
+  PY="$PKG/.venv/bin/python"
+elif [[ -x "$HOME/.agents/skills/ai-daily/.venv/bin/python" ]]; then
+  PY="$HOME/.agents/skills/ai-daily/.venv/bin/python"
+else
+  PY="${MORNINGBRIEF_PYTHON:-python3}"
+fi
+export PYTHONPATH="$PKG${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY" -m morningbrief "$@"

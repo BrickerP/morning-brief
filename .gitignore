@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+packages/morningbrief/.venv/
+.venv/
+venv/
+
+# Local / machine
+.omx/
+dist/
+*.app/
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Generated runtime (keep example config)
+var/
+logs/
+*.log
+
+# Agent workspaces
+.agent-workspaces/
+
+# venv may be a symlink
+packages/morningbrief/.venv
+**/.venv
+**/.venv/**
