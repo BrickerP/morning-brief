@@ -17,9 +17,11 @@ def check_agent_auth(agent_bin: str) -> bool:
     if result.returncode != 0:
         return False
     text = (result.stdout + result.stderr).lower()
-    if "not logged" in text or "log in" in text or "unauthorized" in text:
+    # Negative markers win even on rc==0 (some CLIs print "not logged in" and exit 0).
+    if any(marker in text for marker in ("not logged", "log in", "logged out", "unauthorized", "no active")):
         return False
-    return "logged in" in text or "✓" in result.stdout or result.returncode == 0
+    # Require a positive signal rather than trusting a bare rc==0.
+    return "logged in" in text or "✓" in result.stdout
 
 
 def build_context(date: str, results: list[SourceResult], section_kinds: dict[str, str]) -> dict[str, Any]:

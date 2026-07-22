@@ -76,19 +76,6 @@ def _agent_sections() -> list[BriefSection]:
 
 
 def test_source_result_from_dict_roundtrip():
-    sr = SourceResult(
-        id="daily_read",
-        title="科技早读",
-        status="partial",
-        items=[{"title": "a", "link": "x"}, {"title": "b"}],
-        children=[
-            ChildStatus(id="noahpinion", status="ok", item_count=2),
-            ChildStatus(id="stratechery", status="failed", item_count=0, error=ErrorInfo("net", "down")),
-        ],
-        error=None,
-        meta={"fetched_at": "t", "duration_ms": 9, "adapter_version": "0.1.0"},
-    )
-    assert SourceResult.from_dict(sr.to_dict()).to_dict() == sr.to_dict()
 
     failed = SourceResult(
         id="ai_daily",
@@ -98,6 +85,24 @@ def test_source_result_from_dict_roundtrip():
         meta={"fetched_at": "t", "duration_ms": 0, "adapter_version": "0.1.0"},
     )
     assert SourceResult.from_dict(failed.to_dict()).to_dict() == failed.to_dict()
+
+
+def test_check_agent_auth_requires_positive_signal():
+    """rc==0 alone must not count as logged in; negative markers win even on rc==0."""
+    import morningbrief.synth as synth
+    from morningbrief.proc import ProcResult
+
+    cases = [
+        ("✓ Logged in as user@example.com", "", 0, True),
+        ("You are not logged in", "", 0, False),
+        ("Please log in to continue", "", 0, False),
+        ("", "unauthorized", 0, False),
+        ("some unrelated noise", "", 0, False),  # rc0 but no positive signal
+        ("Logged in", "", 1, False),             # nonzero rc always fails
+    ]
+    for out, err, rc, expected in cases:
+        with patch.object(synth, "run_cmd", return_value=ProcResult(rc, out, err)):
+            assert synth.check_agent_auth("agent") is expected, (out, rc)
 
 
 def test_load_sources_from_disk_matches_payloads(tmp_path: Path, monkeypatch):

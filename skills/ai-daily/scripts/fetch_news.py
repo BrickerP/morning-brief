@@ -114,6 +114,34 @@ def get_content_by_date(feed, target_date):
     return None
 
 
+def entry_date_str(entry):
+    """Best-effort YYYY-MM-DD for an entry (link date first, then pubDate)."""
+    if hasattr(entry, 'link'):
+        d = extract_date_from_link(entry.link)
+        if d:
+            return d
+    if hasattr(entry, 'published_parsed') and entry.published_parsed:
+        return datetime(*entry.published_parsed[:6], tzinfo=timezone.utc).strftime("%Y-%m-%d")
+    return None
+
+
+def get_candidates_within(feed, start_date, end_date):
+    """Return all entries with date in [start_date, end_date], newest-first.
+
+    Single-pass over an already-fetched feed so the adapter never re-downloads
+    the ~1MB RSS once per candidate day.
+    """
+    out = []
+    for entry in feed.entries:
+        d = entry_date_str(entry)
+        if d and start_date <= d <= end_date:
+            item = extract_entry_content(entry)
+            item["date"] = d
+            out.append(item)
+    out.sort(key=lambda c: c.get("date", ""), reverse=True)
+    return out
+
+
 def extract_entry_content(entry):
     """Extract content from an RSS entry
 
@@ -150,6 +178,10 @@ def main():
     parser.add_argument('--date', type=str, help='Get content for specific date (YYYY-MM-DD)')
     parser.add_argument('--relative', type=str, choices=['yesterday', 'today', 'day-before'],
                        help='Relative date: yesterday, today, day-before')
+    parser.add_argument('--within-days', type=int,
+                       help='Return all entries within N days back from --as-of (newest-first JSON list)')
+    parser.add_argument('--as-of', type=str,
+                       help='Anchor date YYYY-MM-DD for --within-days (default: today UTC)')
 
     args = parser.parse_args()
 
@@ -164,6 +196,19 @@ def main():
             "max_date": max_date,
             "total_entries": len(feed.entries)
         }, indent=2))
+        return
+
+    # Window mode: single fetch, in-process slice over [as_of - N, as_of].
+    if args.within_days is not None:
+        anchor = args.as_of or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        anchor_dt = datetime.strptime(anchor, "%Y-%m-%d")
+        start = (anchor_dt - timedelta(days=args.within_days)).strftime("%Y-%m-%d")
+        candidates = get_candidates_within(feed, start, anchor)
+        print(json.dumps({
+            "window": {"start": start, "end": anchor, "days": args.within_days},
+            "count": len(candidates),
+            "candidates": candidates,
+        }, ensure_ascii=False, indent=2))
         return
 
     # Calculate target date

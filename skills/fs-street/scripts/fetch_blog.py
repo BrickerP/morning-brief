@@ -91,6 +91,30 @@ def get_content_by_date(feed, target_date):
     return None
 
 
+def get_public_within(feed, start_date, end_date):
+    """Return public (non-members-only) entries in [start_date, end_date], newest-first.
+
+    Single pass over an already-fetched feed so the adapter never re-downloads
+    the RSS once per candidate day while walking the lookback window.
+    """
+    out = []
+    for entry in feed.entries:
+        if not (hasattr(entry, 'published_parsed') and entry.published_parsed):
+            continue
+        dt = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+        d = dt.strftime("%Y-%m-%d")
+        if not (start_date <= d <= end_date):
+            continue
+        item = extract_entry_content(entry)
+        item["content"] = item.get("content", "").replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+        item["date"] = d
+        if item.get("is_members_only"):
+            continue
+        out.append(item)
+    out.sort(key=lambda c: c.get("date", ""), reverse=True)
+    return out
+
+
 def extract_entry_content(entry):
     """Extract content from an RSS entry
 
@@ -155,6 +179,10 @@ def main():
     parser.add_argument('--relative', type=str, choices=['yesterday', 'today', 'day-before'],
                        help='Relative date: yesterday, today, day-before')
     parser.add_argument('--search', type=str, help='Search articles by keyword')
+    parser.add_argument('--within-days', type=int,
+                       help='Return public entries within N days back from --as-of (newest-first JSON list)')
+    parser.add_argument('--as-of', type=str,
+                       help='Anchor date YYYY-MM-DD for --within-days (default: today UTC)')
 
     args = parser.parse_args()
 
@@ -169,6 +197,19 @@ def main():
             "max_date": max_date,
             "total_entries": len(feed.entries)
         }, indent=2))
+        return
+
+    # Window mode: single fetch, in-process slice + members-only filter.
+    if args.within_days is not None:
+        anchor = args.as_of or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        anchor_dt = datetime.strptime(anchor, "%Y-%m-%d")
+        start = (anchor_dt - timedelta(days=args.within_days)).strftime("%Y-%m-%d")
+        candidates = get_public_within(feed, start, anchor)
+        print(json.dumps({
+            "window": {"start": start, "end": anchor, "days": args.within_days},
+            "count": len(candidates),
+            "candidates": candidates,
+        }, ensure_ascii=False, indent=2))
         return
 
     # Search mode

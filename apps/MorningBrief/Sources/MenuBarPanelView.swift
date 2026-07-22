@@ -33,41 +33,30 @@ struct BriefSectionView: View {
     let section: BriefSection
     var isHighlighted: Bool = false
 
+    private var style: SectionStyle { SectionStyle.forKind(section.kind) }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(section.title)
-                .font(.headline)
-            markdownBody
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            HStack(spacing: DS.Space.sm) {
+                Image(systemName: style.symbol)
+                    .font(.subheadline)
+                    .foregroundStyle(style.tint)
+                    .frame(width: 18)
+                Text(section.title)
+                    .font(DS.Typo.sectionTitle)
+            }
+            MarkdownView(markdown: section.body)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
+        .padding(DS.Space.md)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isHighlighted ? Color.accentColor.opacity(0.14) : Color.clear)
+            RoundedRectangle(cornerRadius: DS.Radius.md)
+                .fill(isHighlighted ? Color.accentColor.opacity(0.14) : DS.Palette.cardFill)
         )
-    }
-
-    @ViewBuilder
-    private var markdownBody: some View {
-        // Full markdown syntax so headings, lists and quotes render as blocks
-        // (not the inline-only whitespace mode). Links stay tappable via openURL.
-        if let attributed = try? AttributedString(
-            markdown: section.body,
-            options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .full,
-                failurePolicy: .returnPartiallyParsedIfPossible
-            )
-        ) {
-            Text(attributed)
-                .font(.body)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        } else {
-            Text(section.body)
-                .font(.body)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.Radius.md)
+                .strokeBorder(isHighlighted ? Color.accentColor.opacity(0.4) : DS.Palette.cardStroke)
+        )
     }
 }
 
@@ -323,16 +312,13 @@ struct MenuBarPanelView: View {
 
     private func sectionsList(proxy: ScrollViewProxy) -> some View {
         let sections = readableSections
-        return VStack(alignment: .leading, spacing: 20) {
+        return VStack(alignment: .leading, spacing: DS.Space.md) {
             ForEach(sections) { section in
                 BriefSectionView(
                     section: section,
                     isHighlighted: highlightedSectionID == section.id
                 )
                 .id(section.id)
-                if section.id != sections.last?.id {
-                    Divider()
-                }
             }
         }
     }

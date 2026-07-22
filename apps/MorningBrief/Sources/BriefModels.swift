@@ -16,7 +16,8 @@ enum BriefStatus: String, Codable, CaseIterable {
         case .idle: "sun.horizon"
         case .fetching, .synthesizing, .running: "arrow.triangle.2.circlepath"
         case .ready: "newspaper"
-        case .degraded, .locked: "exclamationmark.triangle"
+        case .degraded: "exclamationmark.triangle"
+        case .locked: "hourglass"
         case .failed, .error: "xmark.circle"
         }
     }
