@@ -78,6 +78,14 @@ def test_partial_source_still_writes_brief(tmp_path: Path, monkeypatch):
     assert brief["sections"]
     assert any(s["id"] == "daily_read" for s in brief["sections"])
 
+    # run.json must surface per-source fetch durations at the top level (was a dead field).
+    run = json.loads((day / "run.json").read_text(encoding="utf-8"))
+    assert set(run["timings_ms"]) == {"ai_daily", "daily_read"}
+    assert all(isinstance(v, int) for v in run["timings_ms"].values())
+    assert run["timings_ms"] == {
+        sid: info["duration_ms"] for sid, info in run["sources"].items()
+    }
+
 
 def test_brief_meta_injects_staleness():
     cfg = AppConfig(staleness_hours=48, timezone="Asia/Shanghai")

@@ -1,9 +1,9 @@
 ---
 name: daily-read
 description: >-
-  Free daily reading digest from Noahpinion, Exponential View, Every, and
-  Stratechery (public content only). Use when the user asks for 今日早读, 科技早报,
-  最近的科技文章, or a dated reading roundup.
+  Free daily reading digest from Marginal Revolution, MIT Technology Review,
+  Every, and Stratechery (public content only). Use when the user asks for 今日早读,
+  科技早报, 最近的科技文章, or a dated reading roundup.
 ---
 
 # Daily Read（免费合订本）
@@ -14,8 +14,8 @@ description: >-
 
 | Source | Method | Free policy |
 |--------|--------|-------------|
-| Noahpinion | RSS | Public Substack feed only |
-| Exponential View | RSS | Public Substack feed only |
+| Marginal Revolution | RSS | Public self-hosted feed |
+| MIT Technology Review | RSS | Public self-hosted feed |
 | Every | Sitemap + article page | Public posts only |
 | Stratechery | RSS | `Articles` + `This Week in Stratechery` only; skip `Daily Update` |
 

@@ -9,6 +9,7 @@ import logging
 import re
 import sys
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -33,23 +34,20 @@ LOG_PATH = SKILL_ROOT / "logs" / "fetch.log"
 CACHE_PATH = SKILL_ROOT / "cache" / "seen_urls.json"
 
 USER_AGENT = "daily-read/0.1 (+local skill; free public content only)"
-REQUEST_TIMEOUT = 30
+# (connect, read) — a dead host fails the connect fast instead of hanging the read.
+REQUEST_TIMEOUT: tuple[float, float] = (6, 20)
 SUMMARY_MAX = 200
 
 SOURCES = {
-    "noahpinion": {
-        "label": "Noahpinion（经济视角）",
+    "marginal_revolution": {
+        "label": "Marginal Revolution（经济视角）",
         "kind": "rss",
-        "url": "https://noahpinion.substack.com/feed",
-        "alt_urls": [
-            "https://www.noahpinion.blog/feed",
-            "https://noahpinion.blog/feed",
-        ],
+        "url": "https://marginalrevolution.com/feed",
     },
-    "exponential_view": {
-        "label": "Exponential View（指数技术与社会）",
+    "mit_tech_review": {
+        "label": "MIT Technology Review（科技与社会）",
         "kind": "rss",
-        "url": "https://www.exponentialview.co/feed",
+        "url": "https://www.technologyreview.com/feed/",
     },
     "every": {
         "label": "Every（科技人文）",
@@ -65,7 +63,7 @@ SOURCES = {
     },
 }
 
-SOURCE_ORDER = ("noahpinion", "exponential_view", "every", "stratechery")
+SOURCE_ORDER = ("marginal_revolution", "mit_tech_review", "every", "stratechery")
 
 
 @dataclass
@@ -483,29 +481,28 @@ def fetch_every(start: datetime, end: datetime, limit: int = 12) -> SourceResult
 
 
 def fetch_all(start: datetime, end: datetime) -> list[SourceResult]:
-    results: list[SourceResult] = []
-    for source_id in SOURCE_ORDER:
+    # Sources are independent and network-bound: fetch concurrently so the section
+    # wall-clock is the slowest single source, not the sum. Preserve SOURCE_ORDER.
+    def _fetch_one(source_id: str) -> SourceResult:
         conf = SOURCES[source_id]
         kind = conf["kind"]
-        if kind == "rss":
-            results.append(fetch_rss_source(source_id, conf, start, end))
-        elif kind == "stratechery_rss":
-            results.append(
-                fetch_rss_source(
-                    source_id,
-                    conf,
-                    start,
-                    end,
-                    allowed_categories=set(conf["allowed_categories"]),
+        try:
+            if kind == "rss":
+                return fetch_rss_source(source_id, conf, start, end)
+            if kind == "stratechery_rss":
+                return fetch_rss_source(
+                    source_id, conf, start, end, allowed_categories=set(conf["allowed_categories"])
                 )
-            )
-        elif kind == "every":
-            results.append(fetch_every(start, end))
-        else:
-            results.append(
-                SourceResult(source=source_id, label=conf["label"], error=f"Unknown kind: {kind}")
-            )
-    return results
+            if kind == "every":
+                return fetch_every(start, end)
+            return SourceResult(source=source_id, label=conf["label"], error=f"Unknown kind: {kind}")
+        except Exception as exc:  # noqa: BLE001 - never let one source abort the pool
+            logging.exception("Source %s crashed", source_id)
+            return SourceResult(source=source_id, label=conf.get("label", source_id), error=str(exc))
+
+    with ThreadPoolExecutor(max_workers=len(SOURCE_ORDER)) as pool:
+        by_id = dict(zip(SOURCE_ORDER, pool.map(_fetch_one, SOURCE_ORDER)))
+    return [by_id[sid] for sid in SOURCE_ORDER]
 
 
 def render_markdown(results: list[SourceResult], as_of: datetime, start: datetime, end: datetime) -> str:

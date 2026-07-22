@@ -276,6 +276,10 @@ def _finalize_run(
     finished = _now()
     run_state["finished_at"] = finished
     run_state["run_at"] = finished
+    # Surface per-source fetch durations at the top level (the field was declared but never filled).
+    run_state["timings_ms"] = {
+        sid: info.get("duration_ms", 0) for sid, info in run_state.get("sources", {}).items()
+    }
     try:
         validate_run_state(run_state)
     except Exception as exc:  # noqa: BLE001

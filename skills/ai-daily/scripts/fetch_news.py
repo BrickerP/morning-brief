@@ -19,7 +19,9 @@ except ImportError:
 
 # RSS URL
 RSS_URL = "https://news.smol.ai/rss.xml"
-REQUEST_TIMEOUT = 30
+# (connect, read): fail a dead host fast on connect instead of hanging the read,
+# so one slow source cannot eat the adapter's section budget.
+REQUEST_TIMEOUT = (6, 20)
 
 
 def fetch_rss():
