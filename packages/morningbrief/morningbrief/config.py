@@ -13,11 +13,29 @@ else:
     import tomli as tomllib  # type: ignore
 
 
+def _bundled_skill_script(*parts: str) -> str:
+    """Prefer repo-vendored skills/; fall back to legacy personal skill installs."""
+    bundled = REPO_ROOT / "skills" / Path(*parts)
+    if bundled.is_file():
+        return str(bundled)
+    legacy = {
+        ("ai-daily", "scripts", "fetch_news.py"): Path.home()
+        / ".agents/skills/ai-daily/scripts/fetch_news.py",
+        ("fs-street", "scripts", "fetch_blog.py"): Path.home()
+        / ".agents/skills/fs-street/scripts/fetch_blog.py",
+        ("daily-read", "scripts", "fetch_articles.py"): Path.home()
+        / ".agents/skills/daily-read/scripts/fetch_articles.py",
+        ("dating-time", "scripts", "fetch_douban.py"): Path.home()
+        / ".claude/skills/dating-time/scripts/fetch_douban.py",
+    }
+    return str(legacy.get(parts, bundled))
+
+
 DEFAULT_SKILL_PATHS = {
-    "ai_daily": str(Path.home() / ".agents/skills/ai-daily/scripts/fetch_news.py"),
-    "fs_street": str(Path.home() / ".agents/skills/fs-street/scripts/fetch_blog.py"),
-    "daily_read": str(Path.home() / ".agents/skills/daily-read/scripts/fetch_articles.py"),
-    "dating": str(Path.home() / ".claude/skills/dating-time/scripts/fetch_douban.py"),
+    "ai_daily": _bundled_skill_script("ai-daily", "scripts", "fetch_news.py"),
+    "fs_street": _bundled_skill_script("fs-street", "scripts", "fetch_blog.py"),
+    "daily_read": _bundled_skill_script("daily-read", "scripts", "fetch_articles.py"),
+    "dating": _bundled_skill_script("dating-time", "scripts", "fetch_douban.py"),
 }
 
 

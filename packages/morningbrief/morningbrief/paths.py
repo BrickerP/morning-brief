@@ -25,12 +25,11 @@ def ensure_app_dirs() -> None:
 
 
 def resolve_python() -> str:
-    # Prefer package venv, then shared skill venv, then env/python3.
+    # Prefer package venv, then env/python3.
     # Do NOT Path.resolve() — that follows the venv python symlink to the
     # base interpreter and drops site-packages.
     candidates = [
         PACKAGE_ROOT / ".venv" / "bin" / "python",
-        Path.home() / ".agents/skills/ai-daily/.venv/bin/python",
     ]
     for c in candidates:
         if c.exists():

@@ -32,16 +32,18 @@ briefctl install-schedule   # 每天 07:30
 
 **不要 App 也可以**：只用 `briefctl run` + `briefctl open` 看 `brief.md`。
 
-## 源依赖（可选）
+## 四个数据源 skill（已随仓开源）
 
-默认会去找本机 skill 脚本（不存在则该源失败/空，其它源继续）：
+抓取脚本打在仓库 `skills/` 里，**clone 后即可用**，不必再装个人 skill 目录：
 
-- `~/.claude/skills/dating-time/...`
-- `~/.agents/skills/ai-daily/...`
-- `~/.agents/skills/fs-street/...`
-- `~/.agents/skills/daily-read/...`
+| 源 | 仓内路径 | 独立仓库（可单独当 Agent skill 装） |
+|----|----------|--------------------------------------|
+| AI 日报 | `skills/ai-daily/` | [BrickerP/skill-ai-daily](https://github.com/BrickerP/skill-ai-daily) |
+| Farnam Street | `skills/fs-street/` | [BrickerP/skill-fs-street](https://github.com/BrickerP/skill-fs-street) |
+| 科技早读 | `skills/daily-read/` | [BrickerP/skill-daily-read](https://github.com/BrickerP/skill-daily-read) |
+| 豆瓣同城活动 | `skills/dating-time/` | [BrickerP/skill-dating-time](https://github.com/BrickerP/skill-dating-time) |
 
-在 `config.toml` 里改 `skill_script` 或关掉 `enabled = false`。
+默认 `config.toml` 的 `skill_script` 指向上述仓内路径。若你本机已有旧配置指向 `~/.agents/skills/...`，改成仓内路径或删掉配置让 `briefctl` 重新生成。单个源可在配置里 `enabled = false`。
 
 ## 开发
 

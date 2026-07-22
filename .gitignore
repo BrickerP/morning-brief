@@ -18,6 +18,10 @@ dist/
 .idea/
 .vscode/
 
+# Skill runtime caches
+skills/**/cache/
+skills/**/logs/
+
 # Generated runtime (keep example config)
 var/
 logs/
