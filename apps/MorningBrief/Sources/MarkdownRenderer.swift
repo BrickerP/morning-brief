@@ -19,7 +19,7 @@ enum MDBlock: Identifiable {
         case .bullet(let items): "ul:\(items.joined(separator: "|"))"
         case .ordered(let items): "ol:\(items.joined(separator: "|"))"
         case .quote(let t): "q:\(t)"
-        case .rule: "hr:\(UUID().uuidString)"
+        case .rule: "hr"
         }
     }
 }
@@ -34,6 +34,7 @@ enum MarkdownParser {
         var paragraph: [String] = []
         var bullets: [String] = []
         var ordered: [String] = []
+        var quote: [String] = []
 
         func flushParagraph() {
             let text = paragraph.joined(separator: " ").trimmingCharacters(in: .whitespaces)
@@ -46,7 +47,12 @@ enum MarkdownParser {
         func flushOrdered() {
             if !ordered.isEmpty { blocks.append(.ordered(items: ordered)); ordered.removeAll() }
         }
-        func flushAll() { flushParagraph(); flushBullets(); flushOrdered() }
+        func flushQuote() {
+            let text = quote.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty { blocks.append(.quote(text: text)) }
+            quote.removeAll()
+        }
+        func flushAll() { flushParagraph(); flushBullets(); flushOrdered(); flushQuote() }
 
         for rawLine in lines {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -61,37 +67,36 @@ enum MarkdownParser {
             // ATX heading
             if let hashRange = line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) {
                 flushAll()
-                let level = line.distance(from: line.startIndex, to: hashRange.upperBound)
-                    - (line[hashRange].filter { $0 == " " }.count)
+                // Count only the leading '#'; whitespace kind (space or tab) is irrelevant.
+                let level = line.prefix { $0 == "#" }.count
                 let text = String(line[hashRange.upperBound...])
                 blocks.append(.heading(level: min(max(level, 1), 6), text: text))
                 continue
             }
 
-            // Blockquote
+            // Blockquote — accumulate consecutive lines into one quote block.
             if line.hasPrefix(">") {
-                flushBullets(); flushOrdered()
-                let text = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
-                blocks.append(.quote(text: text))
+                flushParagraph(); flushBullets(); flushOrdered()
+                quote.append(String(line.dropFirst()).trimmingCharacters(in: .whitespaces))
                 continue
             }
 
             // Unordered list
             if let r = line.range(of: #"^[-*+]\s+"#, options: .regularExpression) {
-                flushParagraph(); flushOrdered()
+                flushParagraph(); flushOrdered(); flushQuote()
                 bullets.append(String(line[r.upperBound...]))
                 continue
             }
 
             // Ordered list
             if let r = line.range(of: #"^\d+[.)]\s+"#, options: .regularExpression) {
-                flushParagraph(); flushBullets()
+                flushParagraph(); flushBullets(); flushQuote()
                 ordered.append(String(line[r.upperBound...]))
                 continue
             }
 
             // Plain paragraph text (accumulate)
-            flushBullets(); flushOrdered()
+            flushBullets(); flushOrdered(); flushQuote()
             paragraph.append(line)
         }
 

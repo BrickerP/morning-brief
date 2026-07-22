@@ -12,7 +12,9 @@ struct MarkdownView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
-            ForEach(blocks) { block in
+            // Positional identity: stable across re-renders (unlike a random id) and
+            // unique even when two blocks share content (e.g. multiple rules).
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
         }
