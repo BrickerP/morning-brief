@@ -318,6 +318,7 @@ struct WorkLedgerView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .textSelection(.enabled)
     }
 
     private func editForm(_ item: WorkItem) -> some View {

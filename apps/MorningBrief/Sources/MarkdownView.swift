@@ -19,6 +19,7 @@ struct MarkdownView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .textSelection(.enabled)
     }
 
     @ViewBuilder

@@ -314,6 +314,7 @@ struct MenuBarPanelView: View {
                 }
                 .padding(.bottom, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
             }
         }
     }
