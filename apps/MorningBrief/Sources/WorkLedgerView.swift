@@ -207,11 +207,11 @@ struct WorkLedgerView: View {
             if isEditingItem && !readOnly {
                 editForm(item)
             } else {
-                HStack(alignment: .top) {
-                    Text(item.title)
-                        .font(.title3.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: DS.Space.sm)
+                HStack {
+                    Text("任务记录")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
                     if readOnly {
                         WorkStatusLabel(status: item.status)
                     } else {
@@ -245,25 +245,14 @@ struct WorkLedgerView: View {
                         .accessibilityLabel("当前状态 \(item.status.title)，选择新状态")
                     }
                 }
-
-                if !item.detail.isEmpty {
-                    Text(item.detail)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
             }
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(item.events) { event in
-                        WorkEventRailRow(
-                            event: event,
-                            summary: item.summary(for: event),
-                            isReverted: item.isEventReverted(event)
-                        )
-                    }
-                    currentRailMarker
-                }
+                Text(selectableTranscript(item))
+                    .font(.callout)
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("任务标题、说明和全部进展")
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, DS.Space.sm)
             }
@@ -318,7 +307,6 @@ struct WorkLedgerView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .textSelection(.enabled)
     }
 
     private func editForm(_ item: WorkItem) -> some View {
@@ -380,18 +368,16 @@ struct WorkLedgerView: View {
         }
     }
 
-    private var currentRailMarker: some View {
-        HStack(alignment: .top, spacing: DS.Space.sm) {
-            Circle()
-                .stroke(Color.secondary, lineWidth: 1)
-                .frame(width: 8, height: 8)
-                .padding(.top, 4)
-            Text("当前")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    private func selectableTranscript(_ item: WorkItem) -> AttributedString {
+        let value = item.selectionTranscript { event in
+            guard let date = event.occurredAtDate else { return "" }
+            return DateFormatter.workTime.string(from: date)
         }
-        .padding(.leading, 2)
-        .padding(.top, DS.Space.sm)
+        var transcript = AttributedString(value)
+        if let titleRange = transcript.range(of: item.title) {
+            transcript[titleRange].font = .title3.bold()
+        }
+        return transcript
     }
 
     private func navigationTitle(_ backTitle: String, title: String, action: @escaping () -> Void) -> some View {
@@ -552,72 +538,6 @@ private struct WorkStatusLabel: View {
         .padding(.vertical, 4)
         .background(status.tint.opacity(0.1))
         .clipShape(Capsule())
-    }
-}
-
-private struct WorkEventRailRow: View {
-    let event: WorkEvent
-    let summary: String
-    let isReverted: Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: DS.Space.sm) {
-            VStack(spacing: 0) {
-                Circle()
-                    .fill(isReverted ? Color.secondary : actorTint)
-                    .frame(width: 8, height: 8)
-                    .padding(.top, 4)
-                Rectangle()
-                    .fill(Color.secondary.opacity(0.25))
-                    .frame(width: 1)
-                    .frame(minHeight: 44)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(actorTitle)
-                        .font(.caption.weight(.semibold))
-                    if let date = event.occurredAtDate {
-                        Text(DateFormatter.workTime.string(from: date))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    if isReverted {
-                        Text("已撤销")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Text(summary)
-                    .font(.callout)
-                    .foregroundStyle(isReverted ? .secondary : .primary)
-                    .strikethrough(isReverted)
-                if let reason = event.reason, !reason.isEmpty {
-                    Text("理由：\(reason)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if !event.evidence.isEmpty {
-                    Text("证据  \(event.evidence.joined(separator: " · "))")
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-            .padding(.bottom, DS.Space.md)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private var actorTitle: String {
-        switch event.actor {
-        case "human": "你"
-        case "agent": "Agent"
-        default: "系统"
-        }
-    }
-
-    private var actorTint: Color {
-        event.actor == "agent" ? .accentColor : .secondary
     }
 }
 

@@ -366,6 +366,38 @@ struct WorkItem: Codable, Identifiable, Hashable {
         }
         return target.summary
     }
+
+    /// One continuous text value for native selection across the title, detail,
+    /// and every timeline event. SwiftUI cannot extend a selection across
+    /// separate `Text` views, so the detail screen renders this as one `Text`.
+    func selectionTranscript(eventTime: (WorkEvent) -> String) -> String {
+        var blocks = [title]
+        if !detail.isEmpty {
+            blocks.append(detail)
+        }
+
+        for event in events {
+            let actor = switch event.actor {
+            case "human": "你"
+            case "agent": "Agent"
+            default: "系统"
+            }
+            let time = eventTime(event)
+            let heading = time.isEmpty ? actor : "\(actor) · \(time)"
+            let revertedPrefix = isEventReverted(event) ? "[已撤销] " : ""
+            var lines = [heading, "\(revertedPrefix)\(summary(for: event))"]
+            if let reason = event.reason, !reason.isEmpty {
+                lines.append("理由：\(reason)")
+            }
+            if !event.evidence.isEmpty {
+                lines.append("证据：\(event.evidence.joined(separator: " · "))")
+            }
+            blocks.append(lines.joined(separator: "\n"))
+        }
+
+        blocks.append("当前")
+        return blocks.joined(separator: "\n\n")
+    }
 }
 
 struct WorkHistoryDay: Codable, Identifiable, Hashable {

@@ -53,6 +53,39 @@ struct BriefctlRunnerSmoke {
             fatalError("latest reversible event must follow commit sequence")
         }
 
+        let followUp = WorkEvent(
+            sequence: 3,
+            eventId: "follow-up",
+            itemId: "clock",
+            kind: "progress_added",
+            actor: "human",
+            occurredAt: "2026-07-23T10:30:00.000000Z",
+            payload: ["text": .string("继续验证生产环境支付链路")],
+            reason: nil,
+            evidence: [],
+            idempotencyKey: nil,
+            targetEventId: nil
+        )
+        let selectableItem = WorkItem(
+            id: item.id,
+            title: "今天测试支付回归",
+            detail: "",
+            status: item.status,
+            createdAt: item.createdAt,
+            updatedAt: followUp.occurredAt,
+            version: 3,
+            terminalDate: nil,
+            events: [created, status, followUp]
+        )
+        let transcript = selectableItem.selectionTranscript { event in
+            event.eventId == followUp.eventId ? "10:30" : "10:00"
+        }
+        guard transcript.hasPrefix("今天测试支付回归\n\n"),
+              transcript.contains("Agent · 10:00\n状态：待处理 → 进行中"),
+              transcript.contains("你 · 10:30\n继续验证生产环境支付链路") else {
+            fatalError("selection transcript must keep title and follow-ups in one string: \(transcript)")
+        }
+
         let editArguments = BriefctlCommand.todoEdit(
             id: "clock",
             title: "校准系统时钟",
