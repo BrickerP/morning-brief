@@ -21,6 +21,21 @@ mkdir -p "$BIN"
 ln -sfn "$ROOT/bin/briefctl" "$BIN/briefctl"
 echo "→ Linked $BIN/briefctl → $ROOT/bin/briefctl"
 
+TODO_SKILL="$ROOT/skills/todo"
+for SKILL_HOME in \
+  "$HOME/.codex/skills" \
+  "$HOME/.claude/skills" \
+  "$HOME/.cursor/skills"; do
+  mkdir -p "$SKILL_HOME"
+  TODO_LINK="$SKILL_HOME/todo"
+  if [[ -e "$TODO_LINK" && ! -L "$TODO_LINK" ]]; then
+    echo "Refusing to replace non-symlink skill at $TODO_LINK" >&2
+    exit 1
+  fi
+  ln -sfn "$TODO_SKILL" "$TODO_LINK"
+  echo "→ Linked $TODO_LINK → $TODO_SKILL"
+done
+
 # Pin for the menu bar app (portable; no hardcoded user paths in Swift)
 SUPPORT="$HOME/Library/Application Support/MorningBrief"
 mkdir -p "$SUPPORT"

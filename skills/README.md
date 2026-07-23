@@ -15,5 +15,6 @@ Standalone skill installs (for Cursor/Claude skill directories) can clone the fo
 
 # Bundled skills
 
-- `morning-brief-todo/` — 让本地 Agent 通过 `briefctl todo` 查询、更新和撤销
-  Morning Brief 工作台账，并为外部信息附加理由与证据。
+- `todo/` — 让 Codex、Claude Code 和 Cursor 通过 `briefctl todo`
+  查询、更新和撤销 Morning Brief 工作台账，并为外部信息附加理由与证据。
+  `scripts/install.sh` 会把三个客户端的 `todo` 入口链接到此目录。

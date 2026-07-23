@@ -1,0 +1,4 @@
+interface:
+  display_name: "Todo"
+  short_description: "Manage the local Morning Brief daily work ledger"
+  default_prompt: "Use $todo to review today’s Morning Brief work ledger and record or update the relevant task, progress, status, and evidence."

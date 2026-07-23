@@ -12,7 +12,8 @@ cd morning-brief
 ./scripts/bootstrap.sh
 ```
 
-这会：创建 venv、把 `briefctl` 链到 `~/.local/bin`、钉住 App 用的路径、编译并打开菜单栏 App。
+这会：创建 venv、把 `briefctl` 链到 `~/.local/bin`、把 `todo` skill
+链接到 Codex/Claude Code/Cursor、钉住 App 用的路径、编译并打开菜单栏 App。
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -43,7 +44,18 @@ briefctl todo undo EVENT_ID --reason "恢复上一个状态"
 所有命令向 stdout 输出 JSON。Agent 写入时应提供稳定的
 `--idempotency-key`，并优先带上最近投影中的 `version` 作为
 `--expected-version`；外部数据的来源放在可重复的 `--evidence` 中，判断依据放在
-`--reason` 中。完整约定见 [`skills/morning-brief-todo/`](skills/morning-brief-todo/)。
+`--reason` 中。完整约定见 [`skills/todo/`](skills/todo/)。
+
+安装后，三个 Agent 客户端共用仓内同一份 skill：
+
+```text
+~/.codex/skills/todo  -> <repo>/skills/todo
+~/.claude/skills/todo -> <repo>/skills/todo
+~/.cursor/skills/todo -> <repo>/skills/todo
+```
+
+可在 Codex、Claude Code 或 Cursor 中显式使用 `$todo`，也可以直接说
+“记录今天的待办”“补一条进展”“把这个任务改为已完成”“看最近完成了什么”。
 
 | 路径 | 用途 |
 |------|------|
