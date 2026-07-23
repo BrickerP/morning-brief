@@ -15,6 +15,9 @@ final class BriefStore: ObservableObject {
     @Published private(set) var isDoctorRunning = false
     @Published private(set) var isWorkMutating = false
     @Published private(set) var sessionAnalysis: SessionAnalysis?
+    @Published private(set) var locatedSession: ClaudeSessionMatch?
+    @Published private(set) var recentSessions: [RecentSession] = []
+    @Published private(set) var isSessionLocating = false
     @Published private(set) var isSessionAnalyzing = false
     @Published private(set) var isSessionApplying = false
 
@@ -36,6 +39,8 @@ final class BriefStore: ObservableObject {
     private var watcher: BriefWatcher!
     private let decoder = JSONDecoder()
     private var noticeClearTask: Task<Void, Never>?
+    private var sessionTask: Task<Void, Never>?
+    private var pipelineTask: Task<Void, Never>?
     private var workProjectionDatesInFlight = Set<String>()
     private var lastKnownToday = BriefPaths.todayDateString()
 
@@ -182,15 +187,18 @@ final class BriefStore: ObservableObject {
         noticeClearTask?.cancel()
         notice = "正在更新…"
 
-        Task {
+        pipelineTask = Task {
             var succeeded = false
             var alreadyRunning = false
+            var cancelled = false
             defer {
                 done()
                 // briefctl always writes today's folder; pick up any newly created day.
                 refreshAvailableDates()
                 if isViewingToday { reloadFromDisk() }
-                if alreadyRunning {
+                if cancelled {
+                    setTransientNotice("已取消")
+                } else if alreadyRunning {
                     notice = "已在生成"
                 } else if succeeded {
                     setTransientNotice("已更新")
@@ -205,6 +213,9 @@ final class BriefStore: ObservableObject {
                 } else {
                     succeeded = true
                 }
+            } catch is CancellationError {
+                cancelled = true
+                status = isBusy ? .running : .idle
             } catch let error as BriefctlError {
                 switch error {
                 case .failed(let exitCode, _) where exitCode == 75:
@@ -218,6 +229,11 @@ final class BriefStore: ObservableObject {
                 status = .error
             }
         }
+    }
+
+    /// Cancel an in-flight fetch/synth pipeline command.
+    func cancelPipeline() {
+        pipelineTask?.cancel()
     }
 
     /// Show a short-lived notice (e.g. 「已更新」) that auto-clears after a beat.
@@ -355,11 +371,11 @@ final class BriefStore: ObservableObject {
 
     func analyzeClaudeSession(tail: String) {
         let value = tail.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty, !isSessionAnalyzing, !isSessionApplying else { return }
+        guard !value.isEmpty, !isSessionLocating, !isSessionAnalyzing, !isSessionApplying else { return }
         isSessionAnalyzing = true
         errorMessage = nil
         notice = "Agent 正在定位并通读 Claude session…"
-        Task {
+        sessionTask = Task {
             defer { isSessionAnalyzing = false }
             do {
                 let result = try await runner.run(.assistantAnalyze(tail: value))
@@ -367,12 +383,87 @@ final class BriefStore: ObservableObject {
                     SessionAnalysis.self,
                     from: Data(result.stdout.utf8)
                 )
+                locatedSession = nil
                 setTransientNotice("Session 已分析")
+            } catch is CancellationError {
+                setTransientNotice("已取消")
             } catch {
                 errorMessage = error.localizedDescription
                 notice = nil
             }
         }
+    }
+
+    /// Fast locate-only phase: find the matching session without running the agent.
+    func locateSession(tail: String) {
+        let value = tail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !isSessionLocating, !isSessionAnalyzing, !isSessionApplying else { return }
+        isSessionLocating = true
+        errorMessage = nil
+        notice = "正在定位 Claude session…"
+        sessionTask = Task {
+            defer { isSessionLocating = false }
+            do {
+                let result = try await runner.run(.assistantLocate(tail: value))
+                locatedSession = try decoder.decode(
+                    ClaudeSessionMatch.self,
+                    from: Data(result.stdout.utf8)
+                )
+                notice = nil
+            } catch is CancellationError {
+                setTransientNotice("已取消")
+            } catch {
+                errorMessage = error.localizedDescription
+                notice = nil
+            }
+        }
+    }
+
+    /// Load recent parent sessions for the pick-without-paste list.
+    func loadRecentSessions(limit: Int = 15) {
+        Task {
+            do {
+                let result = try await runner.run(.assistantSessions(limit: limit))
+                recentSessions = try decoder.decode(
+                    RecentSessionList.self,
+                    from: Data(result.stdout.utf8)
+                ).sessions
+            } catch is CancellationError {
+                // ignore
+            } catch {
+                // A failed listing is non-fatal; leave the composer usable.
+            }
+        }
+    }
+
+    /// Analyze one already-chosen session file, skipping the locate phase.
+    func analyzeConfirmedSession(sourceFile: String) {
+        guard !isSessionLocating, !isSessionAnalyzing, !isSessionApplying else { return }
+        isSessionAnalyzing = true
+        errorMessage = nil
+        notice = "Agent 正在通读该 Claude session…"
+        sessionTask = Task {
+            defer { isSessionAnalyzing = false }
+            do {
+                let result = try await runner.run(.assistantAnalyzeFile(sessionFile: sourceFile))
+                sessionAnalysis = try decoder.decode(
+                    SessionAnalysis.self,
+                    from: Data(result.stdout.utf8)
+                )
+                locatedSession = nil
+                setTransientNotice("Session 已分析")
+            } catch is CancellationError {
+                setTransientNotice("已取消")
+            } catch {
+                errorMessage = error.localizedDescription
+                notice = nil
+            }
+        }
+    }
+
+    /// Cancel an in-flight locate or analyze.
+    func cancelSession() {
+        sessionTask?.cancel()
     }
 
     func applySessionAnalysis(onSuccess: @escaping () -> Void) {
@@ -413,8 +504,9 @@ final class BriefStore: ObservableObject {
     }
 
     func clearSessionAnalysis() {
-        guard !isSessionAnalyzing, !isSessionApplying else { return }
+        guard !isSessionLocating, !isSessionAnalyzing, !isSessionApplying else { return }
         sessionAnalysis = nil
+        locatedSession = nil
         errorMessage = nil
     }
 

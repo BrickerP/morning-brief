@@ -50,7 +50,7 @@
 
 ## Accessibility
 - Target standard: macOS HIG + WCAG-minded contrast using system semantic colors
-- Keyboard/focus behavior: Quit supports ⌘Q; Enter submits capture/progress; standard controls remain focusable. Dedicated capture/clear shortcuts are deferred.
+- Keyboard/focus behavior: Quit supports ⌘Q; Enter submits capture/progress; the work lens autofocuses quick-capture and binds ⌘N to refocus it; Esc returns from a work item / history to the list; the brief lens binds ⌘R to Refresh; the Agent composer offers a paste button and autofocuses. Standard controls remain focusable.
 - Contrast/readability: Primary/secondary text pairing; error text on light red background
 - Screen-reader semantics: Status always includes text/icon; work rows announce title, status, last actor/time, and history availability; historical mode announces read-only
 - Reduced motion and sensory considerations: No autoplay animation; static layout
@@ -64,11 +64,14 @@
 - Loading: `running` icon; Refresh disabled while `briefctl run` in flight
 - Empty: Sun icon + “No brief yet” + hint to Refresh
 - Error: Red banner with stderr/message; icon `xmark.circle`
-- Success: Ready newspaper icon; optional blue notice (e.g. “已在生成” for exit 75)
+- Success: Ready newspaper icon; optional blue notice (e.g. “已在生成” for exit 75); a fresh brief flags an unread blue dot on the 晨报 lens until opened
 - Disabled: Refresh/Doctor disabled during respective subprocess
+- Cancellable: Long agent calls (session analysis, brief synthesis) show a 取消 control; cancelling terminates briefctl and its `agent` grandchild, then shows a neutral “已取消” notice rather than an error
 - Offline/slow network: Reflected via source chip status and `degraded`/`error` run states from artifacts
 - Work mutation: Controls pause during the local command; drafts clear only after success. Failures retain typed text, show the diagnostic, and regenerate the projection to reconcile any committed event.
 - Agent update: A quiet unread dot on the work lens and a chronological event with actor/reason/evidence; no pulsing or approval modal
+- Session pick: The Agent lens lists recent Claude sessions (newest first, with preview); picking one analyzes it directly without pasting
+- Session locate: Pasting an ending first runs a fast locate phase and shows the matched session for confirmation before the slow agent read; a wrong match can be restarted without waiting
 - Session analysis: Show locating/reading progress without mutating work; show the matched session ID, summary, Todo matches, and every proposed mutation before one explicit confirmation
 - Session apply success: Clear the completed Agent conversation and navigate directly to the refreshed work ledger; do not leave a success dead-end in the Agent lens
 - Session conflict: If any matched Todo changed after analysis, reject the stale proposal set and ask for a fresh analysis rather than partially overwriting current work

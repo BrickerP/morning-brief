@@ -17,6 +17,7 @@ struct WorkLedgerView: View {
     @State private var archivedItem: WorkItem?
     @State private var showingHistory = false
     @State private var completedExpanded = false
+    @FocusState private var captureFocused: Bool
 
     private var selectedItem: WorkItem? {
         guard let selectedItemID else { return nil }
@@ -42,6 +43,7 @@ struct WorkLedgerView: View {
             if store.isViewingToday {
                 TextField("记下一件刚发生的工作…", text: $captureText)
                     .textFieldStyle(.roundedBorder)
+                    .focused($captureFocused)
                     .onSubmit(capture)
                     .disabled(store.isWorkMutating)
                     .accessibilityLabel("快速记录工作")
@@ -66,6 +68,27 @@ struct WorkLedgerView: View {
 
             Divider()
             workFooter
+        }
+        .background(captureShortcut)
+        .onAppear {
+            if store.isViewingToday, !(store.work?.readOnly ?? false) {
+                captureFocused = true
+            }
+        }
+    }
+
+    /// Hidden ⌘N shortcut that focuses the quick-capture field.
+    @ViewBuilder
+    private var captureShortcut: some View {
+        if store.isViewingToday {
+            Button {
+                captureFocused = true
+            } label: { EmptyView() }
+            .buttonStyle(.plain)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .keyboardShortcut("n", modifiers: .command)
+            .accessibilityHidden(true)
         }
     }
 
@@ -191,6 +214,17 @@ struct WorkLedgerView: View {
                 .padding(.bottom, DS.Space.sm)
             }
         }
+        .background(backShortcut { showingHistory = false })
+    }
+
+    /// Hidden Esc shortcut that runs a back action (detail/history dismissal).
+    private func backShortcut(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) { EmptyView() }
+            .buttonStyle(.plain)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityHidden(true)
     }
 
     private func detailView(_ item: WorkItem, readOnly: Bool) -> some View {
@@ -307,6 +341,21 @@ struct WorkLedgerView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .background(
+            // Esc returns to the list — but not while editing, where the edit
+            // form's own Cancel already owns the Escape key.
+            Group {
+                if !isEditingItem {
+                    backShortcut {
+                        if archivedItem != nil {
+                            archivedItem = nil
+                        } else {
+                            selectedItemID = nil
+                        }
+                    }
+                }
+            }
+        )
     }
 
     private func editForm(_ item: WorkItem) -> some View {

@@ -13,7 +13,7 @@ from typing import Any, Callable
 from morningbrief import paths
 from morningbrief.atomic import atomic_write_json, atomic_write_text
 from morningbrief.config import AppConfig
-from morningbrief.proc import ProcResult, run_cmd
+from morningbrief.proc import ProcResult, run_cancellable, run_cmd
 from morningbrief.work_ledger import WorkLedger
 
 
@@ -125,6 +125,46 @@ def _search_anchor(
     return parent_sessions
 
 
+def _session_from_file(
+    session_file: Path,
+    root: Path,
+    *,
+    matched_anchors: list[str] | None = None,
+    confidence: str | None = None,
+) -> dict[str, Any]:
+    """Build the canonical session dict for one parent session JSONL.
+
+    Shared by ``find_claude_session`` (anchor search) and the recent-session
+    listing / confirmed-analysis paths so every entry point produces the exact
+    same shape, including discovered ``subagents/*.jsonl``.
+    """
+    session_id = session_file.stem
+    session_dir = session_file.parent / session_id
+    subagent_dir = session_dir / "subagents"
+    subagent_files = sorted(subagent_dir.glob("*.jsonl")) if subagent_dir.is_dir() else []
+    anchors = matched_anchors or []
+    if confidence is None:
+        confidence = "high" if len(anchors) >= 2 else "medium"
+    try:
+        project = session_file.relative_to(root).parts[0]
+    except ValueError:
+        project = session_file.parent.name
+
+    return {
+        "id": session_id,
+        "project": project,
+        "source_file": str(session_file),
+        "modified_at": datetime.fromtimestamp(
+            session_file.stat().st_mtime, timezone.utc
+        ).isoformat().replace("+00:00", "Z"),
+        "matched_anchors": anchors,
+        "confidence": confidence,
+        "file_count": 1 + len(subagent_files),
+        "subagent_count": len(subagent_files),
+        "files": [str(session_file), *(str(path) for path in subagent_files)],
+    }
+
+
 def find_claude_session(
     tail: str,
     *,
@@ -161,26 +201,148 @@ def find_claude_session(
         reverse=True,
     )
     session_file = ranked[0]
-    session_id = session_file.stem
-    session_dir = session_file.parent / session_id
-    subagent_dir = session_dir / "subagents"
-    subagent_files = sorted(subagent_dir.glob("*.jsonl")) if subagent_dir.is_dir() else []
     matched_anchors = matched[session_file]
     confidence = "high" if len(matched_anchors) >= 2 or scores[session_file] >= 80 else "medium"
+    return _session_from_file(
+        session_file,
+        root,
+        matched_anchors=matched_anchors,
+        confidence=confidence,
+    )
 
-    return {
-        "id": session_id,
-        "project": session_file.parent.name,
-        "source_file": str(session_file),
-        "modified_at": datetime.fromtimestamp(
-            session_file.stat().st_mtime, timezone.utc
-        ).isoformat().replace("+00:00", "Z"),
-        "matched_anchors": matched_anchors,
-        "confidence": confidence,
-        "file_count": 1 + len(subagent_files),
-        "subagent_count": len(subagent_files),
-        "files": [str(session_file), *(str(path) for path in subagent_files)],
-    }
+
+# Backwards/forwards-compatible alias: locating is exactly find_claude_session
+# (it never runs the agent), exposed under an intent-revealing name for the CLI.
+locate_claude_session = find_claude_session
+
+
+def _validate_session_path(session_file: Path, root: Path) -> Path:
+    """Resolve and confirm ``session_file`` is a parent session under ``root``.
+
+    Guards ``analyze_confirmed_session`` against arbitrary paths: the resolved
+    file must be exactly ``<root>/<project>/<id>.jsonl`` (two parts under root),
+    a real file, with a ``.jsonl`` suffix. Subagent transcripts (four parts) and
+    any path outside the projects root are rejected.
+    """
+    resolved = session_file.expanduser().resolve()
+    root_resolved = root.resolve()
+    try:
+        relative = resolved.relative_to(root_resolved)
+    except ValueError:
+        raise SessionAssistantError(f"Session file is outside the Claude projects root: {session_file}")
+    if resolved.suffix != ".jsonl" or len(relative.parts) != 2:
+        raise SessionAssistantError(f"Not a top-level Claude session file: {session_file}")
+    if not resolved.is_file():
+        raise SessionAssistantError(f"Claude session file not found: {session_file}")
+    return resolved
+
+
+def _session_preview(path: Path, *, max_lines: int = 60, max_chars: int = 80) -> str:
+    """Cheap human-readable snippet for a session, read from its first lines only.
+
+    Prefers a ``type == "summary"`` record's text; otherwise the first user
+    message text. Never reads the whole transcript.
+    """
+    def _shorten(value: str) -> str:
+        value = " ".join(value.split())
+        return value[: max_chars - 1] + "…" if len(value) > max_chars else value
+
+    def _message_text(record: dict[str, Any]) -> str | None:
+        message = record.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+            if isinstance(content, list):
+                for part in content:
+                    if (
+                        isinstance(part, dict)
+                        and isinstance(part.get("text"), str)
+                        and part["text"].strip()
+                    ):
+                        return part["text"].strip()
+        return None
+
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as handle:
+            first_user: str | None = None
+            for index, line in enumerate(handle):
+                if index >= max_lines:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                if record.get("type") == "summary":
+                    summary = record.get("summary") or record.get("content")
+                    if isinstance(summary, str) and summary.strip():
+                        return _shorten(summary.strip())
+                if first_user is None and record.get("type") == "user":
+                    text = _message_text(record)
+                    if text:
+                        first_user = text
+            if first_user:
+                return _shorten(first_user)
+    except OSError:
+        return ""
+    return ""
+
+
+def list_recent_sessions(
+    limit: int = 15,
+    project: str | None = None,
+    *,
+    claude_projects_root: Path | None = None,
+) -> dict[str, Any]:
+    """List recent parent Claude sessions, newest first, for pick-without-paste.
+
+    Scans ``<root>/*/*.jsonl`` (parent sessions only — two path parts, excluding
+    ``subagents/``), sorts by mtime descending, and returns lightweight metadata
+    plus a cheap preview per session.
+    """
+    root = claude_projects_root or (Path.home() / ".claude" / "projects")
+    if not root.is_dir():
+        raise SessionAssistantError(f"Claude projects directory not found: {root}")
+    if limit < 1:
+        raise SessionAssistantError("limit must be at least 1")
+
+    candidates: list[tuple[float, Path]] = []
+    for path in root.glob("*/*.jsonl"):
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if len(relative.parts) != 2:
+            continue
+        if project is not None and relative.parts[0] != project:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        candidates.append((mtime, path))
+
+    candidates.sort(key=lambda entry: entry[0], reverse=True)
+    sessions: list[dict[str, Any]] = []
+    for _, path in candidates[:limit]:
+        session = _session_from_file(path, root)
+        sessions.append(
+            {
+                "id": session["id"],
+                "project": session["project"],
+                "source_file": session["source_file"],
+                "modified_at": session["modified_at"],
+                "subagent_count": session["subagent_count"],
+                "preview": _session_preview(path),
+            }
+        )
+    return {"sessions": sessions}
+
 
 
 def _sha256(path: Path) -> str:
@@ -422,7 +584,7 @@ def analyze_claude_session(
     assistant_dir: Path | None = None,
     agent_workspace_dir: Path | None = None,
     search_runner: Callable[..., ProcResult] = run_cmd,
-    agent_runner: Callable[..., ProcResult] = run_cmd,
+    agent_runner: Callable[..., ProcResult] = run_cancellable,
 ) -> dict[str, Any]:
     if not tail.strip():
         raise SessionAssistantError("Paste the ending of a Claude terminal session first.")
@@ -436,6 +598,64 @@ def analyze_claude_session(
         claude_projects_root=claude_projects_root,
         command_runner=search_runner,
     )
+    return _analyze_session(
+        session,
+        cfg=cfg,
+        ledger=ledger,
+        assistant_dir=assistant_dir,
+        agent_workspace_dir=agent_workspace_dir,
+        agent_runner=agent_runner,
+        tail=tail,
+    )
+
+
+def analyze_confirmed_session(
+    session_file: Path | str,
+    *,
+    cfg: AppConfig,
+    ledger: WorkLedger | None = None,
+    claude_projects_root: Path | None = None,
+    assistant_dir: Path | None = None,
+    agent_workspace_dir: Path | None = None,
+    agent_runner: Callable[..., ProcResult] = run_cancellable,
+) -> dict[str, Any]:
+    """Analyze one already-chosen parent session, skipping the locate phase.
+
+    Used by the recent-session picker and the confirm step of the paste flow so
+    the slow agent pass only runs against a session the user actually confirmed.
+    """
+    root = claude_projects_root or (Path.home() / ".claude" / "projects")
+    if not root.is_dir():
+        raise SessionAssistantError(f"Claude projects directory not found: {root}")
+    resolved = _validate_session_path(Path(session_file), root)
+    session = _session_from_file(resolved, root)
+    return _analyze_session(
+        session,
+        cfg=cfg,
+        ledger=ledger,
+        assistant_dir=assistant_dir,
+        agent_workspace_dir=agent_workspace_dir,
+        agent_runner=agent_runner,
+        tail="",
+    )
+
+
+def _analyze_session(
+    session: dict[str, Any],
+    *,
+    cfg: AppConfig,
+    ledger: WorkLedger | None = None,
+    assistant_dir: Path | None = None,
+    agent_workspace_dir: Path | None = None,
+    agent_runner: Callable[..., ProcResult] = run_cancellable,
+    tail: str = "",
+) -> dict[str, Any]:
+    """Copy transcripts, run the agent review, and persist a normalized analysis.
+
+    The heavy half shared by ``analyze_claude_session`` (locate-then-analyze) and
+    ``analyze_confirmed_session`` (pre-located). ``tail`` only feeds the agent's
+    ``provided_session_ending`` context and is empty when entered from the picker.
+    """
     work_ledger = ledger or WorkLedger(timezone_name=cfg.timezone)
     snapshot = work_ledger.view(days=14, publish=False)
     analysis_id = str(uuid.uuid4())

@@ -60,18 +60,21 @@ briefctl todo undo EVENT_ID --reason "恢复上一个状态"
 
 ### Claude Session 回传
 
-菜单栏的 `Agent` 页支持粘贴 Claude terminal session 的结尾。系统会：
+菜单栏的 `Agent` 页支持两种入口：**直接从最近会话列表里点一条**（免粘贴），或粘贴 Claude terminal session 的结尾。系统会：
 
-1. 用结尾中的辨识度文本定位 `~/.claude/projects` 下的原始 JSONL；
+1. （粘贴时）先用结尾中的辨识度文本**秒级定位** `~/.claude/projects` 下的原始 JSONL，展示匹配供确认——定位错可立即重选，不必空等；
 2. 把主会话及其 `subagents/*.jsonl` 放进隔离工作区，交给与晨报相同的
-   Cursor `agent` CLI 完整审阅；
+   Cursor `agent` CLI 完整审阅（此步较慢，可随时「取消」）；
 3. 返回中文 summary、匹配的 Todo 和结构化更新建议；
 4. 只有点击“确认更新”后才写入台账。若 Todo 版本已变化，会拒绝旧建议并要求重分析。
 
 也可以直接使用 CLI：
 
 ```bash
-briefctl assistant analyze --input /path/to/session-ending.txt
+briefctl assistant sessions --limit 15          # 列出最近会话（免粘贴选择）
+briefctl assistant locate --input session.txt   # 只定位，不分析（秒级）
+briefctl assistant analyze --input session.txt          # 定位 + 分析
+briefctl assistant analyze --session-file /path/to/xxx.jsonl  # 跳过定位，直接分析
 briefctl assistant apply ANALYSIS_ID
 ```
 

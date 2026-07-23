@@ -576,6 +576,32 @@ struct SessionApplyResult: Codable {
     }
 }
 
+/// One recent Claude session for the pick-without-paste list on the Agent lens.
+struct RecentSession: Codable, Identifiable, Hashable {
+    let id: String
+    let project: String
+    let sourceFile: String
+    let modifiedAt: String
+    let subagentCount: Int
+    let preview: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, project, preview
+        case sourceFile = "source_file"
+        case modifiedAt = "modified_at"
+        case subagentCount = "subagent_count"
+    }
+
+    var modifiedAtDate: Date? {
+        BriefDateParser.iso8601Fractional.date(from: modifiedAt)
+            ?? BriefDateParser.iso8601.date(from: modifiedAt)
+    }
+}
+
+struct RecentSessionList: Codable {
+    let sessions: [RecentSession]
+}
+
 enum BriefPaths {
     static let appSupport = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/MorningBrief/briefs", isDirectory: true)

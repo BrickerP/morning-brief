@@ -16,7 +16,10 @@ from morningbrief.schedule import install_schedule, kickstart, uninstall_schedul
 from morningbrief.session_assistant import (
     SessionAssistantError,
     analyze_claude_session,
+    analyze_confirmed_session,
     apply_session_analysis,
+    find_claude_session,
+    list_recent_sessions,
 )
 from morningbrief.timeutil import date_str, local_today
 from morningbrief.work_ledger import LedgerError, WorkLedger
@@ -110,6 +113,25 @@ def main(argv: list[str] | None = None) -> None:
         default="-",
         help="UTF-8 file containing the pasted ending, or - for stdin",
     )
+    p_assistant_analyze.add_argument(
+        "--session-file",
+        help="Analyze this exact parent session JSONL, skipping the locate phase",
+    )
+    p_assistant_locate = assistant_sub.add_parser(
+        "locate",
+        help="Locate the Claude session for pasted ending text without analyzing",
+    )
+    p_assistant_locate.add_argument(
+        "--input",
+        default="-",
+        help="UTF-8 file containing the pasted ending, or - for stdin",
+    )
+    p_assistant_sessions = assistant_sub.add_parser(
+        "sessions",
+        help="List recent Claude sessions, newest first, for pick-without-paste",
+    )
+    p_assistant_sessions.add_argument("--limit", type=int, default=15)
+    p_assistant_sessions.add_argument("--project", help="Restrict to one project directory name")
     p_assistant_apply = assistant_sub.add_parser(
         "apply",
         help="Apply the proposals from a prior analysis after confirmation",
@@ -123,11 +145,22 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "assistant":
         try:
             if args.assistant_cmd == "analyze":
+                if args.session_file:
+                    result = analyze_confirmed_session(args.session_file, cfg=cfg)
+                else:
+                    if args.input == "-":
+                        tail = sys.stdin.read()
+                    else:
+                        tail = Path(args.input).read_text(encoding="utf-8")
+                    result = analyze_claude_session(tail, cfg=cfg)
+            elif args.assistant_cmd == "locate":
                 if args.input == "-":
                     tail = sys.stdin.read()
                 else:
                     tail = Path(args.input).read_text(encoding="utf-8")
-                result = analyze_claude_session(tail, cfg=cfg)
+                result = find_claude_session(tail)
+            elif args.assistant_cmd == "sessions":
+                result = list_recent_sessions(limit=args.limit, project=args.project)
             else:
                 result = apply_session_analysis(args.analysis_id, cfg=cfg)
         except (SessionAssistantError, LedgerError, OSError, sqlite3.Error, ValueError) as error:

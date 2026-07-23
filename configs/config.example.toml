@@ -7,7 +7,7 @@ synth_timeout_s = 300
 lock_ttl_s = 2700
 staleness_hours = 36
 notify_on_degraded = true
-notify_on_ready = false
+notify_on_ready = true
 
 [[sources]]
 id = "dating"

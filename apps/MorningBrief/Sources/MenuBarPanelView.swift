@@ -138,6 +138,7 @@ struct MenuBarPanelView: View {
     @State private var highlightedSectionID: String?
     @AppStorage("MorningBrief.selectedLens") private var selectedLensRaw = PanelLens.brief.rawValue
     @AppStorage("MorningBrief.lastSeenAgentEvent") private var lastSeenAgentEventID = ""
+    @AppStorage("MorningBrief.lastSeenBriefStamp") private var lastSeenBriefStamp = ""
 
     private var selectedLens: PanelLens {
         get { PanelLens(rawValue: selectedLensRaw) ?? .brief }
@@ -174,16 +175,27 @@ struct MenuBarPanelView: View {
             if selectedLens == .work {
                 store.refreshWorkProjection()
                 markAgentUpdateSeen()
+            } else if selectedLens == .agent {
+                store.loadRecentSessions()
+            } else if selectedLens == .brief {
+                markBriefSeen()
             }
         }
         .onChange(of: selectedLensRaw) {
             if selectedLens == .work {
                 store.refreshWorkProjection()
                 markAgentUpdateSeen()
+            } else if selectedLens == .agent {
+                store.loadRecentSessions()
+            } else if selectedLens == .brief {
+                markBriefSeen()
             }
         }
         .onChange(of: store.work?.latestAgentEvent?.eventId) {
             if selectedLens == .work { markAgentUpdateSeen() }
+        }
+        .onChange(of: store.brief?.generatedAt) {
+            if selectedLens == .brief { markBriefSeen() }
         }
     }
 
@@ -196,6 +208,11 @@ struct MenuBarPanelView: View {
                 HStack(spacing: 5) {
                     Text(lens.title)
                     if lens == .work, hasUnreadAgentUpdate {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 5, height: 5)
+                    }
+                    if lens == .brief, hasUnreadBrief {
                         Circle()
                             .fill(Color.accentColor)
                             .frame(width: 5, height: 5)
@@ -217,6 +234,21 @@ struct MenuBarPanelView: View {
     private func markAgentUpdateSeen() {
         if let eventID = store.work?.latestAgentEvent?.eventId {
             lastSeenAgentEventID = eventID
+        }
+    }
+
+    /// A fresh brief the user hasn't opened yet — identified by its generation
+    /// timestamp so a re-synthesized brief re-flags. Empty briefs never flag.
+    private var hasUnreadBrief: Bool {
+        guard store.isViewingToday,
+              let stamp = store.brief?.generatedAt, !stamp.isEmpty,
+              hasContent else { return false }
+        return stamp != lastSeenBriefStamp
+    }
+
+    private func markBriefSeen() {
+        if store.isViewingToday, let stamp = store.brief?.generatedAt, !stamp.isEmpty {
+            lastSeenBriefStamp = stamp
         }
     }
 
@@ -434,21 +466,32 @@ struct MenuBarPanelView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            Button {
-                store.refresh()
-            } label: {
-                Label(store.isRefreshing ? "更新中…" : "刷新", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-            .disabled(store.isBusy || !store.isViewingToday)
+            if store.isRefreshing || store.isSynthesizing {
+                Button(role: .cancel) {
+                    store.cancelPipeline()
+                } label: {
+                    Label(store.isSynthesizing ? "合成中… 取消" : "更新中… 取消", systemImage: "stop.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+            } else {
+                Button {
+                    store.refresh()
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .keyboardShortcut("r")
+                .disabled(store.isBusy || !store.isViewingToday)
 
-            Button(store.isSynthesizing ? "合成中…" : "合成") {
-                store.synthesize()
+                Button("合成") {
+                    store.synthesize()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.isBusy || !store.isViewingToday)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(store.isBusy || !store.isViewingToday)
 
             Spacer()
 

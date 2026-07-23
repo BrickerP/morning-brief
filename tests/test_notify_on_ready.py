@@ -10,7 +10,6 @@ from morningbrief.config import AppConfig, SourceConfig
 from morningbrief.models import BriefSection, ErrorInfo, SourceResult
 from morningbrief.pipeline import maybe_notify_ready, run_pipeline, synth_brief
 
-
 def _redirect_paths(tmp_path: Path, monkeypatch) -> Path:
     import morningbrief.paths as paths
     import morningbrief.pipeline as pipeline
@@ -89,10 +88,44 @@ def test_ready_with_flag_notifies_once_and_persists(tmp_path: Path, monkeypatch)
     assert mock_notify.call_count == 1
     title, message = mock_notify.call_args.args
     assert title == "Morning Brief"
-    assert "2026-07-21" in message
+    # Ready notifications now lead with the hero headline (deterministic hero here).
+    assert message.startswith("早报已就绪 · ")
 
     run = json.loads((briefs / "2026-07-21" / "run.json").read_text(encoding="utf-8"))
     assert run["notified_ready"] is True
+
+
+def test_ready_notification_without_headline_falls_back_to_date(tmp_path: Path, monkeypatch):
+    briefs = _redirect_paths(tmp_path, monkeypatch)
+    day_dir = briefs / "2026-07-21"
+    day_dir.mkdir(parents=True)
+    cfg = _cfg(notify_on_ready=True)
+
+    run_state = {"status": "ready"}
+    with patch("morningbrief.pipeline.notify") as mock_notify:
+        maybe_notify_ready(cfg, "2026-07-21", day_dir, [_ok("ai_daily", "AI")], run_state)
+
+    assert mock_notify.call_count == 1
+    _, message = mock_notify.call_args.args
+    assert message == "2026-07-21 早报已就绪"
+
+
+def test_ready_notification_includes_hero_headline(tmp_path: Path, monkeypatch):
+    briefs = _redirect_paths(tmp_path, monkeypatch)
+    day_dir = briefs / "2026-07-21"
+    day_dir.mkdir(parents=True)
+    cfg = _cfg(notify_on_ready=True)
+
+    run_state = {"status": "ready"}
+    with patch("morningbrief.pipeline.notify") as mock_notify:
+        maybe_notify_ready(
+            cfg, "2026-07-21", day_dir, [_ok("ai_daily", "AI")], run_state,
+            headline="今日 AI 大新闻",
+        )
+
+    assert mock_notify.call_count == 1
+    _, message = mock_notify.call_args.args
+    assert message == "早报已就绪 · 今日 AI 大新闻"
 
 
 def test_already_notified_run_skips_second_call(tmp_path: Path, monkeypatch):

@@ -62,7 +62,10 @@ briefctl todo note ITEM_ID TEXT [common mutation flags]
 briefctl todo undo EVENT_ID [--actor human|agent|system] [--reason TEXT]
   [--idempotency-key KEY] [--expected-version VERSION]
 briefctl todo history [--date YYYY-MM-DD] [--days 7]
+briefctl assistant sessions [--limit 15] [--project NAME]
+briefctl assistant locate --input SESSION_ENDING_FILE
 briefctl assistant analyze --input SESSION_ENDING_FILE
+briefctl assistant analyze --session-file PARENT_SESSION_JSONL
 briefctl assistant apply ANALYSIS_ID
 ```
 
@@ -121,13 +124,22 @@ all records and supports undo.
 When the user pastes the ending of a Claude terminal session:
 
 1. Save the pasted text to a private temporary UTF-8 file.
-2. Run `briefctl assistant analyze --input FILE`.
-3. Present the returned `summary`, matched session ID, `todo_matches`, and every
+2. Optionally run `briefctl assistant locate --input FILE` first to confirm the
+   matched session cheaply (seconds, no agent read) before the full analysis.
+3. Run `briefctl assistant analyze --input FILE` (locate + full read). To analyze
+   a session the user picked directly — e.g. from `briefctl assistant sessions`
+   — skip locating with `briefctl assistant analyze --session-file PARENT_JSONL`.
+4. Present the returned `summary`, matched session ID, `todo_matches`, and every
    proposed mutation. Do not reinterpret an analysis result as already applied.
-4. After explicit confirmation, run `briefctl assistant apply ANALYSIS_ID`.
-5. Report the applied event IDs and resulting Todo states. If a version
+5. After explicit confirmation, run `briefctl assistant apply ANALYSIS_ID`.
+6. Report the applied event IDs and resulting Todo states. If a version
    conflict occurs, re-run the analysis against the current ledger rather than
    forcing the old proposal.
+
+`assistant sessions` lists recent parent sessions (newest first, with a short
+preview) for pick-without-paste. `--session-file` must be a top-level
+`<project>/<id>.jsonl` under `~/.claude/projects`; subagent transcripts and
+out-of-tree paths are rejected.
 
 The analyzer searches Claude project JSONL by distinctive ending fragments,
 verifies the parent session, includes all discovered subagent JSONL files, and

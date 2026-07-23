@@ -208,6 +208,7 @@ def maybe_notify_ready(
     day_dir: Path,
     results: list[SourceResult],
     run_state: dict[str, Any],
+    headline: str | None = None,
 ) -> None:
     """Notify once when a brief lands 'ready', if enabled. Dedups via run.json flag."""
     if not cfg.notify_on_ready:
@@ -220,7 +221,13 @@ def maybe_notify_ready(
     run_state["notified_ready"] = True
     atomic_write_json(day_dir / "run.json", run_state)
     degraded_sources = [r.id for r in results if r.status in ("failed", "empty")]
-    message = f"{day} 早报已就绪"
+    clean_headline = (headline or "").strip()
+    if clean_headline:
+        if len(clean_headline) > 40:
+            clean_headline = clean_headline[:39] + "…"
+        message = f"早报已就绪 · {clean_headline}"
+    else:
+        message = f"{day} 早报已就绪"
     if degraded_sources:
         message += f"（部分来源异常: {', '.join(degraded_sources)}）"
     notify("Morning Brief", message)
@@ -270,6 +277,7 @@ def _finalize_run(
     results: list[SourceResult],
     run_state: dict[str, Any],
     brief_status: str,
+    headline: str | None = None,
 ) -> dict[str, Any]:
     """Stamp final status/timestamps, validate, persist run.json, and fire the ready notification."""
     run_state["status"] = brief_status if brief_status in ("ready", "degraded", "failed") else "ready"
@@ -285,8 +293,20 @@ def _finalize_run(
     except Exception as exc:  # noqa: BLE001
         run_state["errors"].append(f"run schema: {exc}")
     atomic_write_json(day_dir / "run.json", run_state)
-    maybe_notify_ready(cfg, day, day_dir, results, run_state)
+    maybe_notify_ready(cfg, day, day_dir, results, run_state, headline)
     return run_state
+
+
+def _brief_headline(doc_dict: dict[str, Any] | None) -> str | None:
+    """Pull the hero headline out of a written brief doc for the ready notification."""
+    if not doc_dict:
+        return None
+    hero = doc_dict.get("hero")
+    if isinstance(hero, dict):
+        headline = hero.get("headline")
+        if isinstance(headline, str) and headline.strip():
+            return headline.strip()
+    return None
 
 
 def write_brief_from_results(
@@ -454,7 +474,10 @@ def run_pipeline(
             existing_hero=agent_hero,
         )
 
-        return _finalize_run(day, day_dir, cfg, results, run_state, brief_status)
+        return _finalize_run(
+            day, day_dir, cfg, results, run_state, brief_status,
+            headline=_brief_headline(doc_dict),
+        )
     finally:
         release(lock_path, run_id)
 
@@ -514,11 +537,14 @@ def synth_brief(
         if all(r.status == "failed" for r in results) and results:
             brief_status = "failed"
 
-        _, brief_status = write_brief_from_results(
+        doc_dict, brief_status = write_brief_from_results(
             day, day_dir, cfg, results, section_kinds, sections, meta, brief_status, run_state,
             existing_hero=agent_hero,
         )
 
-        return _finalize_run(day, day_dir, cfg, results, run_state, brief_status)
+        return _finalize_run(
+            day, day_dir, cfg, results, run_state, brief_status,
+            headline=_brief_headline(doc_dict),
+        )
     finally:
         release(lock_path, run_id)

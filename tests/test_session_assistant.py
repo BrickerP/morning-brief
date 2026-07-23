@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from morningbrief.atomic import atomic_write_json
 from morningbrief.config import AppConfig
+from morningbrief.proc import ProcResult
 from morningbrief.session_assistant import (
+    SessionAssistantError,
+    _session_preview,
+    _validate_session_path,
+    analyze_confirmed_session,
     apply_session_analysis,
     candidate_anchors,
     find_claude_session,
+    list_recent_sessions,
     normalize_analysis,
 )
 from morningbrief.work_ledger import WorkLedger
@@ -251,3 +258,146 @@ def test_normalize_analysis_drops_noop_and_duplicate_proposals(tmp_path: Path) -
 
     assert started["item"]["status"] == "in_progress"
     assert analysis["proposals"] == []
+
+
+def _write_session(root: Path, project: str, session_id: str, lines: list[dict]) -> Path:
+    project_dir = root / project
+    project_dir.mkdir(parents=True, exist_ok=True)
+    path = project_dir / f"{session_id}.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_validate_session_path_accepts_parent_and_rejects_others(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    session_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    good = _write_session(root, "-Users-example-work", session_id, [{"type": "user"}])
+    subagents = root / "-Users-example-work" / session_id / "subagents"
+    subagents.mkdir(parents=True)
+    sub = subagents / "agent-review.jsonl"
+    sub.write_text("{}\n", encoding="utf-8")
+
+    assert _validate_session_path(good, root) == good.resolve()
+
+    # Subagent transcript is four parts under root — rejected.
+    try:
+        _validate_session_path(sub, root)
+    except SessionAssistantError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("subagent path should be rejected")
+
+    # Outside the projects root — rejected.
+    outsider = tmp_path / "elsewhere.jsonl"
+    outsider.write_text("{}\n", encoding="utf-8")
+    try:
+        _validate_session_path(outsider, root)
+    except SessionAssistantError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("outside-root path should be rejected")
+
+    # Non-.jsonl — rejected.
+    txt = root / "-Users-example-work" / "note.txt"
+    txt.write_text("hi", encoding="utf-8")
+    try:
+        _validate_session_path(txt, root)
+    except SessionAssistantError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("non-jsonl path should be rejected")
+
+
+def test_list_recent_sessions_orders_and_filters(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    older = _write_session(
+        root, "-proj-a", "11111111-1111-1111-1111-111111111111",
+        [{"type": "summary", "summary": "旧会话摘要"}],
+    )
+    newer = _write_session(
+        root, "-proj-b", "22222222-2222-2222-2222-222222222222",
+        [{"type": "user", "message": {"content": "帮我排查支付回调"}}],
+    )
+    os.utime(older, (1000, 1000))
+    os.utime(newer, (2000, 2000))
+    # A subagent transcript must never surface as a top-level session.
+    subagents = root / "-proj-b" / "22222222-2222-2222-2222-222222222222" / "subagents"
+    subagents.mkdir(parents=True)
+    (subagents / "agent.jsonl").write_text("{}\n", encoding="utf-8")
+
+    listing = list_recent_sessions(claude_projects_root=root)
+    ids = [s["id"] for s in listing["sessions"]]
+    assert ids == [
+        "22222222-2222-2222-2222-222222222222",
+        "11111111-1111-1111-1111-111111111111",
+    ]
+    assert listing["sessions"][0]["preview"] == "帮我排查支付回调"
+    assert listing["sessions"][1]["preview"] == "旧会话摘要"
+
+    only_a = list_recent_sessions(project="-proj-a", claude_projects_root=root)
+    assert [s["id"] for s in only_a["sessions"]] == [
+        "11111111-1111-1111-1111-111111111111"
+    ]
+
+
+def test_session_preview_prefers_summary_then_user(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    path = _write_session(
+        root, "-proj", "33333333-3333-3333-3333-333333333333",
+        [
+            {"type": "user", "message": {"content": [{"text": "第一条用户消息"}]}},
+            {"type": "assistant", "message": {"content": "回答"}},
+        ],
+    )
+    assert _session_preview(path) == "第一条用户消息"
+
+
+def test_analyze_confirmed_session_runs_without_locate(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    session_id = "44444444-4444-4444-4444-444444444444"
+    session_file = _write_session(
+        root, "-Users-example-work", session_id,
+        [{"type": "user", "message": {"content": "生产环境支付回归"}}],
+    )
+    ledger = WorkLedger(
+        db_path=tmp_path / "work-ledger.sqlite3",
+        briefs_dir=tmp_path / "briefs",
+    )
+    created = ledger.add("生产环境支付回归")
+    item_id = created["item"]["id"]
+
+    payload = {
+        "summary": "会话已定位支付问题，仍需生产回归。",
+        "todo_matches": [
+            {"item_id": item_id, "confidence": 0.9, "reason": "剩余工作一致"}
+        ],
+        "proposals": [
+            {
+                "action": "note",
+                "item_id": item_id,
+                "text": "已定位回调问题；剩余生产回归。",
+                "reason": "会话最终结论。",
+            }
+        ],
+    }
+
+    def fake_agent(args, *, timeout_s, env=None):  # noqa: ANN001, ARG001
+        return ProcResult(0, json.dumps(payload, ensure_ascii=False), "")
+
+    analysis = analyze_confirmed_session(
+        session_file,
+        cfg=AppConfig(),
+        ledger=ledger,
+        claude_projects_root=root,
+        assistant_dir=tmp_path / "assistant",
+        agent_workspace_dir=tmp_path / "ws",
+        agent_runner=fake_agent,
+    )
+
+    assert analysis["session"]["id"] == session_id
+    assert analysis["summary"] == "会话已定位支付问题，仍需生产回归。"
+    assert len(analysis["proposals"]) == 1
+    assert analysis["proposals"][0]["action"] == "note"

@@ -69,7 +69,7 @@ class AppConfig:
     lock_ttl_s: int = 2700
     staleness_hours: int = 36
     notify_on_degraded: bool = True
-    notify_on_ready: bool = False
+    notify_on_ready: bool = True
     sources: list[SourceConfig] = field(default_factory=list)
 
     def source_map(self) -> dict[str, SourceConfig]:
@@ -145,7 +145,7 @@ synth_timeout_s = 300
 lock_ttl_s = 2700
 staleness_hours = 36
 notify_on_degraded = true
-notify_on_ready = false
+notify_on_ready = true
 
 [[sources]]
 id = "dating"
@@ -226,6 +226,6 @@ def _from_dict(data: dict[str, Any]) -> AppConfig:
         lock_ttl_s=int(data.get("lock_ttl_s", 2700)),
         staleness_hours=int(data.get("staleness_hours", 36)),
         notify_on_degraded=bool(data.get("notify_on_degraded", True)),
-        notify_on_ready=bool(data.get("notify_on_ready", False)),
+        notify_on_ready=bool(data.get("notify_on_ready", True)),
         sources=sources,
     )

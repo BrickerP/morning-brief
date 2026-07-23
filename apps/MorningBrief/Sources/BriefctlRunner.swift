@@ -18,6 +18,9 @@ enum BriefctlCommand {
     case todoNote(id: String, text: String, expectedVersion: Int, idempotencyKey: String)
     case todoUndo(eventID: String, expectedVersion: Int)
     case assistantAnalyze(tail: String)
+    case assistantAnalyzeFile(sessionFile: String)
+    case assistantLocate(tail: String)
+    case assistantSessions(limit: Int)
     case assistantApply(analysisID: String)
 
     var arguments: [String] {
@@ -70,16 +73,23 @@ enum BriefctlCommand {
             ]
         case .assistantAnalyze:
             ["assistant", "analyze", "--input", "-"]
+        case let .assistantAnalyzeFile(sessionFile):
+            ["assistant", "analyze", "--session-file", sessionFile]
+        case .assistantLocate:
+            ["assistant", "locate", "--input", "-"]
+        case let .assistantSessions(limit):
+            ["assistant", "sessions", "--limit", String(limit)]
         case let .assistantApply(analysisID):
             ["assistant", "apply", analysisID]
         }
     }
 
     var standardInput: String? {
-        if case let .assistantAnalyze(tail) = self {
-            return tail
+        switch self {
+        case let .assistantAnalyze(tail): tail
+        case let .assistantLocate(tail): tail
+        default: nil
         }
-        return nil
     }
 
     private static func todoEditArguments(
@@ -126,6 +136,42 @@ enum BriefctlError: LocalizedError {
     }
 }
 
+/// Thread-safe holder for the in-flight `Process`, shared between the launch
+/// thread and a Task cancellation handler. Terminating the whole process — and,
+/// because briefctl re-signals its own process group, the `agent` grandchild —
+/// is how a long analyze/synth is stopped.
+private final class ProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private(set) var isCancelled = false
+
+    /// Register the running process; if cancellation already arrived, kill it now.
+    func set(_ newProcess: Process) {
+        lock.lock()
+        let cancelled = isCancelled
+        process = newProcess
+        lock.unlock()
+        if cancelled { Self.stop(newProcess) }
+    }
+
+    /// Mark cancelled and terminate any registered process.
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        let running = process
+        lock.unlock()
+        if let running { Self.stop(running) }
+    }
+
+    private static func stop(_ process: Process) {
+        guard process.isRunning else { return }
+        // SIGINT first (briefctl installs a handler that kills the agent group),
+        // then SIGTERM as a fallback.
+        process.interrupt()
+        process.terminate()
+    }
+}
+
 struct BriefctlResult {
     let exitCode: Int32
     let stdout: String
@@ -166,34 +212,47 @@ struct BriefctlRunner: Sendable {
             throw BriefctlError.executableNotFound
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    let result = try self.launch(
-                        executable: executable,
-                        arguments: command.arguments,
-                        standardInput: command.standardInput
-                    )
-                    if result.exitCode == 0 || result.exitCode == 75 {
-                        continuation.resume(returning: result)
-                    } else {
-                        let diagnostic = result.stderr.isEmpty ? result.stdout : result.stderr
-                        continuation.resume(throwing: BriefctlError.failed(
-                            exitCode: result.exitCode,
-                            diagnostic: diagnostic
-                        ))
+        let box = ProcessBox()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        let result = try self.launch(
+                            executable: executable,
+                            arguments: command.arguments,
+                            standardInput: command.standardInput,
+                            register: { box.set($0) }
+                        )
+                        if box.isCancelled {
+                            continuation.resume(throwing: CancellationError())
+                        } else if result.exitCode == 0 || result.exitCode == 75 {
+                            continuation.resume(returning: result)
+                        } else {
+                            let diagnostic = result.stderr.isEmpty ? result.stdout : result.stderr
+                            continuation.resume(throwing: BriefctlError.failed(
+                                exitCode: result.exitCode,
+                                diagnostic: diagnostic
+                            ))
+                        }
+                    } catch {
+                        if box.isCancelled {
+                            continuation.resume(throwing: CancellationError())
+                        } else {
+                            continuation.resume(throwing: error)
+                        }
                     }
-                } catch {
-                    continuation.resume(throwing: error)
                 }
             }
+        } onCancel: {
+            box.cancel()
         }
     }
 
     private func launch(
         executable: String,
         arguments: [String],
-        standardInput: String?
+        standardInput: String?,
+        register: (Process) -> Void
     ) throws -> BriefctlResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -226,6 +285,7 @@ struct BriefctlRunner: Sendable {
 
         do {
             try process.run()
+            register(process)
             if let standardInput, let stdinPipe {
                 try stdinPipe.fileHandleForWriting.write(contentsOf: Data(standardInput.utf8))
                 try stdinPipe.fileHandleForWriting.close()
