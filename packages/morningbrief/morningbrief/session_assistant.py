@@ -23,6 +23,11 @@ MIN_ANCHOR_CHARS = 8
 ALLOWED_ACTIONS = {"add", "edit", "note", "status"}
 ALLOWED_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+CLAUDE_TIMING_LINE = re.compile(
+    r"^[✻✽✶]\s+.*\bfor\s+\d+(?:\.\d+)?\s*(?:ms|s|m|h)\b",
+    re.IGNORECASE,
+)
+CLAUDE_RECAP_PREFIX = re.compile(r"^※\s*recap:\s*", re.IGNORECASE)
 
 
 class SessionAssistantError(ValueError):
@@ -35,6 +40,9 @@ def _utc_iso() -> str:
 
 def _clean_terminal_line(line: str) -> str:
     value = ANSI_ESCAPE.sub("", line).strip()
+    if CLAUDE_TIMING_LINE.match(value):
+        return ""
+    value = CLAUDE_RECAP_PREFIX.sub("", value)
     value = value.strip("│┃║")
     value = re.sub(r"^[❯>$#%]+\s*", "", value)
     value = re.sub(r"^[-*•]\s+", "", value)

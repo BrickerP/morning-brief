@@ -27,6 +27,43 @@ def test_candidate_anchors_strip_terminal_chrome_and_prefer_the_end() -> None:
     assert anchors[0] == "最终结论：支付回调已经修复，但生产环境的 Pro 支付仍需执行一次完整回归。"
     assert all("╭" not in anchor and "╰" not in anchor for anchor in anchors)
     assert candidate_anchors("负数订单是怎么产生的") == ["负数订单是怎么产生的"]
+    recap = candidate_anchors(
+        "✻ Sautéed for 2m 36s\n※ recap: 已经完成团队空间入口定位。"
+    )
+    assert recap == ["已经完成团队空间入口定位。"]
+
+
+def test_find_claude_session_ignores_terminal_timing_and_normalizes_recap(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "projects"
+    project = root / "-Users-example-work"
+    project.mkdir(parents=True)
+    session_id = "26d1d2db-ec1d-425c-9f52-09d25d844cab"
+    expected = project / f"{session_id}.jsonl"
+    recap = (
+        "Stripe 订阅卡死排查已收尾:三篇 KU 文档更新到 243 户、SQL 做成可复制代码块,"
+        "705 已解卡。刚定位 user-d14vbnwda77k 不是 bug,是没建团队空间,"
+        "给了他 medo.dev/space/manage。下一步:如需要,用 chrome-use 登该账号实测此页是否正常。"
+    )
+    expected.write_text(
+        json.dumps({"type": "system", "content": recap}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    matched = find_claude_session(
+        f"""
+要不要我用 chrome-use 登进去实测一下这个页面对他账号是否正常?
+
+✻ Sautéed for 2m 36s
+
+※ recap: {recap}
+""",
+        claude_projects_root=root,
+    )
+
+    assert matched["id"] == session_id
+    assert matched["matched_anchors"] == [recap]
 
 
 def test_find_claude_session_uses_ending_content_and_includes_subagents(
