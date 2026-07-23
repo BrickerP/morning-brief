@@ -297,6 +297,27 @@ final class BriefStore: ObservableObject {
         )
     }
 
+    func editWork(
+        itemID: String,
+        title: String,
+        detail: String,
+        version: Int,
+        idempotencyKey: String,
+        onSuccess: @escaping () -> Void
+    ) {
+        runWorkMutation(
+            .todoEdit(
+                id: itemID,
+                title: title,
+                detail: detail,
+                expectedVersion: version,
+                idempotencyKey: idempotencyKey
+            ),
+            successNotice: "任务已更新",
+            onSuccess: onSuccess
+        )
+    }
+
     func appendProgress(
         itemID: String,
         text: String,

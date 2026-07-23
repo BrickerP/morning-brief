@@ -8,6 +8,11 @@ struct WorkLedgerView: View {
     @State private var captureIdempotencyKey: String?
     @State private var progressIdempotencyKey: String?
     @State private var progressIdempotencyItemID: String?
+    @State private var isEditingItem = false
+    @State private var editTitle = ""
+    @State private var editDetail = ""
+    @State private var editIdempotencyKey: String?
+    @State private var editIdempotencyItemID: String?
     @State private var selectedItemID: String?
     @State private var archivedItem: WorkItem?
     @State private var showingHistory = false
@@ -196,38 +201,56 @@ struct WorkLedgerView: View {
                 } else {
                     selectedItemID = nil
                 }
+                cancelEditing()
             }
 
-            HStack(alignment: .top) {
-                Text(item.title)
-                    .font(.title3.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: DS.Space.sm)
-                if readOnly {
-                    WorkStatusLabel(status: item.status)
-                } else {
-                    Menu {
-                        ForEach(WorkStatus.allCases) { status in
-                            Button {
-                                store.setWorkStatus(itemID: item.id, status: status, version: item.version)
-                            } label: {
-                                Label(status.title, systemImage: status.iconName)
-                            }
+            if isEditingItem && !readOnly {
+                editForm(item)
+            } else {
+                HStack(alignment: .top) {
+                    Text(item.title)
+                        .font(.title3.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: DS.Space.sm)
+                    if readOnly {
+                        WorkStatusLabel(status: item.status)
+                    } else {
+                        Button {
+                            beginEditing(item)
+                        } label: {
+                            Label("编辑", systemImage: "pencil")
                         }
-                    } label: {
-                        WorkStatusLabel(status: item.status, showsChevron: true)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
-                    .disabled(store.isWorkMutating)
-                    .accessibilityLabel("当前状态 \(item.status.title)，选择新状态")
-                }
-            }
+                        .buttonStyle(.borderless)
+                        .disabled(store.isWorkMutating)
+                        .accessibilityHint("修改任务标题和说明")
 
-            if !item.detail.isEmpty {
-                Text(item.detail)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                        Menu {
+                            ForEach(WorkStatus.allCases) { status in
+                                Button {
+                                    store.setWorkStatus(
+                                        itemID: item.id,
+                                        status: status,
+                                        version: item.version
+                                    )
+                                } label: {
+                                    Label(status.title, systemImage: status.iconName)
+                                }
+                            }
+                        } label: {
+                            WorkStatusLabel(status: item.status, showsChevron: true)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .disabled(store.isWorkMutating)
+                        .accessibilityLabel("当前状态 \(item.status.title)，选择新状态")
+                    }
+                }
+
+                if !item.detail.isEmpty {
+                    Text(item.detail)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             ScrollView {
@@ -297,6 +320,65 @@ struct WorkLedgerView: View {
         }
     }
 
+    private func editForm(_ item: WorkItem) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("标题")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TextField("任务标题", text: $editTitle)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { saveEditing(item) }
+                    .accessibilityLabel("任务标题")
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("说明")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $editDetail)
+                    .font(.callout)
+                    .scrollContentBackground(.hidden)
+                    .padding(5)
+                    .frame(minHeight: 64, maxHeight: 96)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color(nsColor: .textBackgroundColor))
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.secondary.opacity(0.3))
+                    }
+                    .accessibilityLabel("任务说明")
+            }
+
+            HStack {
+                Button("取消") {
+                    cancelEditing()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Spacer()
+
+                Button("保存") {
+                    saveEditing(item)
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(
+                    store.isWorkMutating
+                        || editTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
+            }
+        }
+        .onChange(of: editTitle) {
+            resetEditIdempotencyIfPossible()
+        }
+        .onChange(of: editDetail) {
+            resetEditIdempotencyIfPossible()
+        }
+    }
+
     private var currentRailMarker: some View {
         HStack(alignment: .top, spacing: DS.Space.sm) {
             Circle()
@@ -349,6 +431,50 @@ struct WorkLedgerView: View {
                 captureIdempotencyKey = nil
             }
         }
+    }
+
+    private func beginEditing(_ item: WorkItem) {
+        editTitle = item.title
+        editDetail = item.detail
+        editIdempotencyKey = nil
+        editIdempotencyItemID = item.id
+        isEditingItem = true
+    }
+
+    private func cancelEditing() {
+        isEditingItem = false
+        editTitle = ""
+        editDetail = ""
+        editIdempotencyKey = nil
+        editIdempotencyItemID = nil
+    }
+
+    private func saveEditing(_ item: WorkItem) {
+        let title = editTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        let detail = editDetail.trimmingCharacters(in: .whitespacesAndNewlines)
+        let idempotencyKey: String
+        if editIdempotencyItemID == item.id, let existing = editIdempotencyKey {
+            idempotencyKey = existing
+        } else {
+            idempotencyKey = "ui:edit:\(item.id):\(UUID().uuidString)"
+            editIdempotencyKey = idempotencyKey
+            editIdempotencyItemID = item.id
+        }
+        store.editWork(
+            itemID: item.id,
+            title: title,
+            detail: detail,
+            version: item.version,
+            idempotencyKey: idempotencyKey
+        ) {
+            cancelEditing()
+        }
+    }
+
+    private func resetEditIdempotencyIfPossible() {
+        guard !store.isWorkMutating else { return }
+        editIdempotencyKey = nil
     }
 
     private func progressKey(for itemID: String) -> String {

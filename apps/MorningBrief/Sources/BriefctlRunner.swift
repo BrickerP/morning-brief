@@ -7,6 +7,13 @@ enum BriefctlCommand {
     case doctor
     case todoView(date: String?, days: Int)
     case todoAdd(title: String, idempotencyKey: String)
+    case todoEdit(
+        id: String,
+        title: String?,
+        detail: String?,
+        expectedVersion: Int,
+        idempotencyKey: String
+    )
     case todoStatus(id: String, status: WorkStatus, expectedVersion: Int)
     case todoNote(id: String, text: String, expectedVersion: Int, idempotencyKey: String)
     case todoUndo(eventID: String, expectedVersion: Int)
@@ -29,6 +36,14 @@ enum BriefctlCommand {
                 "--actor", "human",
                 "--idempotency-key", idempotencyKey
             ]
+        case let .todoEdit(id, title, detail, expectedVersion, idempotencyKey):
+            Self.todoEditArguments(
+                id: id,
+                title: title,
+                detail: detail,
+                expectedVersion: expectedVersion,
+                idempotencyKey: idempotencyKey
+            )
         case let .todoStatus(id, status, expectedVersion):
             [
                 "todo", "status", id, status.rawValue,
@@ -52,6 +67,28 @@ enum BriefctlCommand {
                 "--idempotency-key", "ui:undo:\(eventID)"
             ]
         }
+    }
+
+    private static func todoEditArguments(
+        id: String,
+        title: String?,
+        detail: String?,
+        expectedVersion: Int,
+        idempotencyKey: String
+    ) -> [String] {
+        var arguments = ["todo", "edit", id]
+        if let title {
+            arguments += ["--title", title]
+        }
+        if let detail {
+            arguments += ["--detail", detail]
+        }
+        arguments += [
+            "--actor", "human",
+            "--expected-version", String(expectedVersion),
+            "--idempotency-key", idempotencyKey
+        ]
+        return arguments
     }
 }
 

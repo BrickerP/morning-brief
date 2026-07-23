@@ -29,6 +29,7 @@ briefctl install-schedule   # 每天 07:30
 
 ```bash
 briefctl todo add "评估新支付回调" --actor human
+briefctl todo edit ITEM_ID --title "核对支付回调" --detail "覆盖退款与重试场景"
 briefctl todo status ITEM_ID in_progress --actor agent \
   --reason "发现待验证链路" --evidence "API-142" --idempotency-key "api-142-start"
 briefctl todo note ITEM_ID "样本 12/12 已核对" --actor agent \

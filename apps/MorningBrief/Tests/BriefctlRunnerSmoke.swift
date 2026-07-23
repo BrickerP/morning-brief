@@ -53,6 +53,24 @@ struct BriefctlRunnerSmoke {
             fatalError("latest reversible event must follow commit sequence")
         }
 
+        let editArguments = BriefctlCommand.todoEdit(
+            id: "clock",
+            title: "校准系统时钟",
+            detail: "检查 NTP 与时区配置",
+            expectedVersion: 2,
+            idempotencyKey: "ui:edit:clock:2"
+        ).arguments
+        guard editArguments == [
+            "todo", "edit", "clock",
+            "--title", "校准系统时钟",
+            "--detail", "检查 NTP 与时区配置",
+            "--actor", "human",
+            "--expected-version", "2",
+            "--idempotency-key", "ui:edit:clock:2"
+        ] else {
+            fatalError("todo edit arguments are incomplete: \(editArguments)")
+        }
+
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("morningbrief-runner-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
