@@ -141,6 +141,39 @@ struct BriefctlRunnerSmoke {
             }
         }
 
+        // Cancellation: a long-running briefctl is terminated by Task cancel and
+        // surfaces CancellationError (not a failed exit-code banner), promptly.
+        let sleeper = directory.appendingPathComponent("sleep-briefctl")
+        let sleepScript = """
+        #!/bin/zsh
+        /usr/bin/python3 -c 'import time; time.sleep(30)'
+        """
+        try sleepScript.write(to: sleeper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: sleeper.path
+        )
+        setenv("MORNINGBRIEF_BRIEFCTL", sleeper.path, 1)
+
+        let cancelStart = Date()
+        let cancelTask = Task { () -> BriefctlResult in
+            try await BriefctlRunner().run(.todoView(date: nil, days: 7))
+        }
+        // Let the subprocess actually start before cancelling.
+        try await Task.sleep(nanoseconds: 500_000_000)
+        cancelTask.cancel()
+        do {
+            _ = try await cancelTask.value
+            fatalError("cancelled run should throw")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            fatalError("cancelled run should throw CancellationError, got: \(error)")
+        }
+        guard Date().timeIntervalSince(cancelStart) < 10 else {
+            fatalError("cancellation did not promptly terminate the 30s sleep")
+        }
+
         print("BriefctlRunner smoke passed")
     }
 }

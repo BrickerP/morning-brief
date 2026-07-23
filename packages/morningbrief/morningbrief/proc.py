@@ -83,15 +83,15 @@ def run_cancellable(
         # cleanup, lock release) run before we exit.
         raise KeyboardInterrupt
 
-    installable = signal.getsignal is not None
+    # Install handlers on the main thread only; signal.signal raises ValueError
+    # elsewhere, in which case we proceed without the group-kill safety net.
     previous: dict[int, object] = {}
-    if installable:
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
-                previous[sig] = signal.getsignal(sig)
-                signal.signal(sig, _on_signal)
-            except (ValueError, OSError):
-                previous.pop(sig, None)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous[sig] = signal.getsignal(sig)
+            signal.signal(sig, _on_signal)
+        except (ValueError, OSError):
+            previous.pop(sig, None)
 
     try:
         try:
