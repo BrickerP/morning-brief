@@ -3,7 +3,7 @@
 ## Source of truth
 - Status: Active
 - Last refreshed: 2026-07-23
-- Primary product surfaces: macOS menu bar extra panel with `工作台账 | 晨报` lenses
+- Primary product surfaces: macOS menu bar extra panel with `工作台账 | Agent | 晨报` lenses
 - Evidence reviewed: `apps/MorningBrief/Sources/*`, `docs/creative/01-brainstorm.md` through `04-prototype.md`, Apple MenuBarExtra + LSUIElement guidance
 
 ## Brand
@@ -12,8 +12,8 @@
 - Avoid: Purple gradients, neon accents, “AI slop” aesthetics, mascot icons, dense widget grids, shimmer loaders, chat bubbles, Kanban squeezed into a menu
 
 ## Product goals
-- Goals: Surface today’s brief at a glance; capture and maintain today's work throughout the day; expose pending/in-progress/completed/cancelled state; retain progress and recent completion history; let a local agent mutate work through inspectable, reversible operations
-- Non-goals: Full markdown editor, project-management hierarchy, calendar/timeboxing, generic connector marketplace, embedded agent chat, Dock presence, multi-window browsing, notification spam
+- Goals: Surface today’s brief at a glance; capture and maintain today's work throughout the day; expose pending/in-progress/completed/cancelled state; retain progress and recent completion history; recover a Claude session from pasted ending text; let the local agent summarize and propose inspectable Todo updates before confirmed, reversible writes
+- Non-goals: Full markdown editor, project-management hierarchy, calendar/timeboxing, generic connector marketplace, general-purpose multi-session chat, Dock presence, multi-window browsing, notification spam
 - Success signals: User captures meeting work before context is lost; one opening answers what is pending/active/completed; agent changes remain explainable and undoable; the brief stays readable without competing with the ledger
 
 ## Personas and jobs
@@ -22,8 +22,8 @@
 - Key contexts of use: Early morning briefing; meetings that create rough commitments; repeated daytime context switches; end-of-day or follow-up progress recall
 
 ## Information architecture
-- Primary navigation: One segmented lens selector inside a single panel: `工作台账 | 晨报`
-- Core routes/screens: Menu bar icon → selected lens; work lens → overview → item event trail or recent history; brief lens → existing hero/full-text flow
+- Primary navigation: One segmented lens selector inside a single panel: `工作台账 | Agent | 晨报`
+- Core routes/screens: Menu bar icon → selected lens; work lens → overview → item event trail or recent history; Agent lens → pasted ending → summary/matches/proposals → confirmation; brief lens → existing hero/full-text flow
 - Content hierarchy: Shared date/lens → work quick capture and state groups or brief content → contextual footer actions
 
 ## Design principles
@@ -44,7 +44,7 @@
 
 ## Components
 - Existing components to reuse: SwiftUI `MenuBarExtra`, `ScrollView`, `Divider`, system `bordered` buttons
-- New/changed components: lens selector, work overview, quick capture, work row, item detail, event rail, recent-history view, plus existing brief components
+- New/changed components: three-way lens selector, work overview, quick capture, work row, item detail, event rail, recent-history view, Claude session composer, Agent summary/match/proposal review, confirmation action, plus existing brief components
 - Variants and states: Empty brief/workday, pending, in-progress, completed, cancelled, read-only historical day, mutation in flight, mutation error followed by projection reconciliation, existing brief loading/degraded/error states
 - Token/component ownership: Defined in Swift sources under `apps/MorningBrief/Sources/`
 
@@ -69,6 +69,8 @@
 - Offline/slow network: Reflected via source chip status and `degraded`/`error` run states from artifacts
 - Work mutation: Controls pause during the local command; drafts clear only after success. Failures retain typed text, show the diagnostic, and regenerate the projection to reconcile any committed event.
 - Agent update: A quiet unread dot on the work lens and a chronological event with actor/reason/evidence; no pulsing or approval modal
+- Session analysis: Show locating/reading progress without mutating work; show the matched session ID, summary, Todo matches, and every proposed mutation before one explicit confirmation
+- Session conflict: If any matched Todo changed after analysis, reject the stale proposal set and ask for a fresh analysis rather than partially overwriting current work
 
 ## Content voice
 - Tone: Brief, neutral, and operational; Chinese work-ledger language coexists with the Morning Brief brand
@@ -76,7 +78,7 @@
 - Microcopy rules: Non-errors use secondary/blue styling; errors use red; avoid exclamation-heavy copy
 
 ## Implementation constraints
-- Framework/styling system: SwiftUI on macOS 14+, AppKit only for process/terminate/open; Python `briefctl` owns the structured agent mutation surface
+- Framework/styling system: SwiftUI on macOS 14+, AppKit only for process/terminate/open; Python `briefctl` owns session recovery, structured Agent analysis, and confirmed work mutations
 - Design-token constraints: No external design system; system colors and fonts only
 - Performance constraints: 2s poll + directory watch; atomic `work.json` projections; small local event ledger; no network dependency for ordinary work operations
 - Compatibility constraints: LSUIElement agent (no Dock); MenuBarExtra `.window` style only

@@ -446,6 +446,136 @@ struct WorkDocument: Codable {
     }
 }
 
+struct ClaudeSessionMatch: Codable, Hashable {
+    let id: String
+    let project: String
+    let sourceFile: String
+    let modifiedAt: String
+    let matchedAnchors: [String]
+    let confidence: String
+    let fileCount: Int
+    let subagentCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id, project, confidence
+        case sourceFile = "source_file"
+        case modifiedAt = "modified_at"
+        case matchedAnchors = "matched_anchors"
+        case fileCount = "file_count"
+        case subagentCount = "subagent_count"
+    }
+}
+
+struct SessionTodoMatch: Codable, Identifiable, Hashable {
+    let itemId: String
+    let title: String
+    let confidence: Double
+    let reason: String
+
+    var id: String { itemId }
+
+    enum CodingKeys: String, CodingKey {
+        case title, confidence, reason
+        case itemId = "item_id"
+    }
+}
+
+enum SessionProposalAction: String, Codable {
+    case add
+    case edit
+    case note
+    case status
+
+    var title: String {
+        switch self {
+        case .add: "新增 Todo"
+        case .edit: "编辑 Todo"
+        case .note: "追加进展"
+        case .status: "更新状态"
+        }
+    }
+}
+
+struct SessionTodoProposal: Codable, Identifiable, Hashable {
+    let proposalId: String
+    let action: SessionProposalAction
+    let reason: String
+    let evidence: [String]
+    let itemId: String?
+    let itemTitle: String?
+    let expectedVersion: Int?
+    let title: String?
+    let detail: String?
+    let text: String?
+    let status: String?
+
+    var id: String { proposalId }
+
+    enum CodingKeys: String, CodingKey {
+        case action, reason, evidence, title, detail, text, status
+        case proposalId = "proposal_id"
+        case itemId = "item_id"
+        case itemTitle = "item_title"
+        case expectedVersion = "expected_version"
+    }
+
+    var summary: String {
+        switch action {
+        case .add:
+            return title ?? "新增未命名 Todo"
+        case .edit:
+            let fields = [
+                title.map { "标题：\($0)" },
+                detail.map { "说明：\($0)" },
+            ].compactMap { $0 }
+            return fields.joined(separator: "\n")
+        case .note:
+            return text ?? "追加进展"
+        case .status:
+            let localized = status.flatMap { WorkStatus(rawValue: $0)?.title } ?? status ?? "未知"
+            return "状态 → \(localized)"
+        }
+    }
+}
+
+struct SessionAnalysis: Codable, Identifiable {
+    let schemaVersion: Int
+    let analysisId: String
+    let createdAt: String
+    let session: ClaudeSessionMatch
+    let summary: String
+    let todoMatches: [SessionTodoMatch]
+    let proposals: [SessionTodoProposal]
+    let appliedAt: String?
+
+    var id: String { analysisId }
+
+    enum CodingKeys: String, CodingKey {
+        case session, summary, proposals
+        case schemaVersion = "schema_version"
+        case analysisId = "analysis_id"
+        case createdAt = "created_at"
+        case todoMatches = "todo_matches"
+        case appliedAt = "applied_at"
+    }
+}
+
+struct SessionApplyResult: Codable {
+    let analysisId: String
+    let appliedCount: Int
+    let duplicate: Bool
+    let events: [WorkEvent]
+    let items: [WorkItem]
+    let appliedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case duplicate, events, items
+        case analysisId = "analysis_id"
+        case appliedCount = "applied_count"
+        case appliedAt = "applied_at"
+    }
+}
+
 enum BriefPaths {
     static let appSupport = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/MorningBrief/briefs", isDirectory: true)

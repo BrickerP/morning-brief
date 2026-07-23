@@ -17,6 +17,7 @@
 		B10000000000000000000009 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000009 /* MarkdownRenderer.swift */; };
 		B1000000000000000000000A /* MarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000A /* MarkdownView.swift */; };
 		B1000000000000000000000B /* WorkLedgerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000B /* WorkLedgerView.swift */; };
+		B1000000000000000000000C /* AgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000C /* AgentChatView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +32,7 @@
 		B20000000000000000000009 /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderer.swift; sourceTree = "<group>"; };
 		B2000000000000000000000A /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
 		B2000000000000000000000B /* WorkLedgerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkLedgerView.swift; sourceTree = "<group>"; };
+		B2000000000000000000000C /* AgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentChatView.swift; sourceTree = "<group>"; };
 		B20000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -58,6 +60,7 @@
 				B20000000000000000000009 /* MarkdownRenderer.swift */,
 				B2000000000000000000000A /* MarkdownView.swift */,
 				B2000000000000000000000B /* WorkLedgerView.swift */,
+				B2000000000000000000000C /* AgentChatView.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -146,6 +149,7 @@
 				B10000000000000000000009 /* MarkdownRenderer.swift in Sources */,
 				B1000000000000000000000A /* MarkdownView.swift in Sources */,
 				B1000000000000000000000B /* WorkLedgerView.swift in Sources */,
+				B1000000000000000000000C /* AgentChatView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -5,6 +5,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 from morningbrief.config import load_config
 from morningbrief.doctor import run_doctor
@@ -12,6 +13,11 @@ from morningbrief.lock import EXIT_LOCKED
 from morningbrief.paths import brief_dir, ensure_app_dirs
 from morningbrief.pipeline import run_pipeline, synth_brief
 from morningbrief.schedule import install_schedule, kickstart, uninstall_schedule
+from morningbrief.session_assistant import (
+    SessionAssistantError,
+    analyze_claude_session,
+    apply_session_analysis,
+)
 from morningbrief.timeutil import date_str, local_today
 from morningbrief.work_ledger import LedgerError, WorkLedger
 
@@ -90,9 +96,45 @@ def main(argv: list[str] | None = None) -> None:
     p_todo_history.add_argument("--date", help="YYYY-MM-DD (default: local today)")
     p_todo_history.add_argument("--days", type=int, default=7)
 
+    p_assistant = sub.add_parser(
+        "assistant",
+        help="Analyze a Claude session and propose confirmed Todo updates",
+    )
+    assistant_sub = p_assistant.add_subparsers(dest="assistant_cmd", required=True)
+    p_assistant_analyze = assistant_sub.add_parser(
+        "analyze",
+        help="Find and fully review a Claude session from pasted ending text",
+    )
+    p_assistant_analyze.add_argument(
+        "--input",
+        default="-",
+        help="UTF-8 file containing the pasted ending, or - for stdin",
+    )
+    p_assistant_apply = assistant_sub.add_parser(
+        "apply",
+        help="Apply the proposals from a prior analysis after confirmation",
+    )
+    p_assistant_apply.add_argument("analysis_id")
+
     args = parser.parse_args(argv)
     ensure_app_dirs()
     cfg = load_config()
+
+    if args.cmd == "assistant":
+        try:
+            if args.assistant_cmd == "analyze":
+                if args.input == "-":
+                    tail = sys.stdin.read()
+                else:
+                    tail = Path(args.input).read_text(encoding="utf-8")
+                result = analyze_claude_session(tail, cfg=cfg)
+            else:
+                result = apply_session_analysis(args.analysis_id, cfg=cfg)
+        except (SessionAssistantError, LedgerError, OSError, sqlite3.Error, ValueError) as error:
+            _print_json({"error": {"type": error.__class__.__name__, "message": str(error)}})
+            raise SystemExit(2)
+        _print_json(result)
+        raise SystemExit(0)
 
     if args.cmd == "todo":
         try:

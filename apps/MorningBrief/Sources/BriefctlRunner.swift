@@ -17,6 +17,8 @@ enum BriefctlCommand {
     case todoStatus(id: String, status: WorkStatus, expectedVersion: Int)
     case todoNote(id: String, text: String, expectedVersion: Int, idempotencyKey: String)
     case todoUndo(eventID: String, expectedVersion: Int)
+    case assistantAnalyze(tail: String)
+    case assistantApply(analysisID: String)
 
     var arguments: [String] {
         switch self {
@@ -66,7 +68,18 @@ enum BriefctlCommand {
                 "--expected-version", String(expectedVersion),
                 "--idempotency-key", "ui:undo:\(eventID)"
             ]
+        case .assistantAnalyze:
+            ["assistant", "analyze", "--input", "-"]
+        case let .assistantApply(analysisID):
+            ["assistant", "apply", analysisID]
         }
+    }
+
+    var standardInput: String? {
+        if case let .assistantAnalyze(tail) = self {
+            return tail
+        }
+        return nil
     }
 
     private static func todoEditArguments(
@@ -156,7 +169,11 @@ struct BriefctlRunner: Sendable {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    let result = try self.launch(executable: executable, arguments: command.arguments)
+                    let result = try self.launch(
+                        executable: executable,
+                        arguments: command.arguments,
+                        standardInput: command.standardInput
+                    )
                     if result.exitCode == 0 || result.exitCode == 75 {
                         continuation.resume(returning: result)
                     } else {
@@ -173,7 +190,11 @@ struct BriefctlRunner: Sendable {
         }
     }
 
-    private func launch(executable: String, arguments: [String]) throws -> BriefctlResult {
+    private func launch(
+        executable: String,
+        arguments: [String],
+        standardInput: String?
+    ) throws -> BriefctlResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -198,13 +219,22 @@ struct BriefctlRunner: Sendable {
         let stderrHandle = try FileHandle(forWritingTo: stderrURL)
         process.standardOutput = stdoutHandle
         process.standardError = stderrHandle
+        let stdinPipe = standardInput == nil ? nil : Pipe()
+        if let stdinPipe {
+            process.standardInput = stdinPipe
+        }
 
         do {
             try process.run()
+            if let standardInput, let stdinPipe {
+                try stdinPipe.fileHandleForWriting.write(contentsOf: Data(standardInput.utf8))
+                try stdinPipe.fileHandleForWriting.close()
+            }
             process.waitUntilExit()
             try stdoutHandle.close()
             try stderrHandle.close()
         } catch {
+            try? stdinPipe?.fileHandleForWriting.close()
             try? stdoutHandle.close()
             try? stderrHandle.close()
             throw error

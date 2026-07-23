@@ -1,6 +1,7 @@
 # Morning Brief
 
-本地菜单栏晨报：Python `briefctl` 抓取 →（可选）Cursor `agent` 合成 → SwiftUI 菜单栏阅读（英雄区结论 + 全文折叠）。
+本地菜单栏晨报：Python `briefctl` 抓取 →（可选）Cursor `agent` 合成 →
+SwiftUI 菜单栏阅读、工作台账与 Claude Session 回传。
 
 macOS 14+ · Python ≥ 3.11 · 可选 [Cursor `agent` CLI](https://cursor.com)
 
@@ -57,11 +58,29 @@ briefctl todo undo EVENT_ID --reason "恢复上一个状态"
 可在 Codex、Claude Code 或 Cursor 中显式使用 `$todo`，也可以直接说
 “记录今天的待办”“补一条进展”“把这个任务改为已完成”“看最近完成了什么”。
 
+### Claude Session 回传
+
+菜单栏的 `Agent` 页支持粘贴 Claude terminal session 的结尾。系统会：
+
+1. 用结尾中的辨识度文本定位 `~/.claude/projects` 下的原始 JSONL；
+2. 把主会话及其 `subagents/*.jsonl` 放进隔离工作区，交给与晨报相同的
+   Cursor `agent` CLI 完整审阅；
+3. 返回中文 summary、匹配的 Todo 和结构化更新建议；
+4. 只有点击“确认更新”后才写入台账。若 Todo 版本已变化，会拒绝旧建议并要求重分析。
+
+也可以直接使用 CLI：
+
+```bash
+briefctl assistant analyze --input /path/to/session-ending.txt
+briefctl assistant apply ANALYSIS_ID
+```
+
 | 路径 | 用途 |
 |------|------|
 | `~/.config/morning-brief/config.toml` | 配置（首次自动生成） |
 | `~/Library/Application Support/MorningBrief/briefs/` | 每日产物 |
 | `~/Library/Application Support/MorningBrief/work-ledger.sqlite3` | 只追加的工作事件账本 |
+| `~/Library/Application Support/MorningBrief/assistant/` | Session 分析与确认写入记录 |
 | `~/Library/Application Support/MorningBrief/briefctl.path` | App 找 CLI |
 
 **无完整 Xcode 也可以**：只需 Command Line Tools（`xcode-select --install`）。`scripts/build_app.sh` 用 `swiftc` 出 `.app`。
@@ -94,5 +113,6 @@ make typecheck-swift
 - 无常驻 daemon；launchd 只是定时跑 `briefctl run`
 - 合同目录按日：`sources/` · `brief.md` · **`brief.json`（最后写入）** · `run.json`
 - UI 优先展示 `hero`（一句结论 + ≤3 必看），全文默认收起
+- Session 分析与 Todo 写入分成两步；Agent 生成建议不等于获得写入确认
 
 详见 [DESIGN.md](DESIGN.md)。

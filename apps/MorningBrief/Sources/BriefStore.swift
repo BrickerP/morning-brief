@@ -14,6 +14,10 @@ final class BriefStore: ObservableObject {
     @Published private(set) var isSynthesizing = false
     @Published private(set) var isDoctorRunning = false
     @Published private(set) var isWorkMutating = false
+    @Published private(set) var sessionAnalysis: SessionAnalysis?
+    @Published private(set) var sessionApplyResult: SessionApplyResult?
+    @Published private(set) var isSessionAnalyzing = false
+    @Published private(set) var isSessionApplying = false
 
     /// Day currently being viewed (`yyyy-MM-dd`). Defaults to today in `BriefPaths.dayTimeZone`.
     @Published private(set) var selectedDate: String = BriefPaths.todayDateString()
@@ -348,6 +352,65 @@ final class BriefStore: ObservableObject {
             .todoUndo(eventID: eventID, expectedVersion: item.version),
             successNotice: "已撤销"
         )
+    }
+
+    func analyzeClaudeSession(tail: String) {
+        let value = tail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !isSessionAnalyzing, !isSessionApplying else { return }
+        isSessionAnalyzing = true
+        sessionApplyResult = nil
+        errorMessage = nil
+        notice = "Agent 正在定位并通读 Claude session…"
+        Task {
+            defer { isSessionAnalyzing = false }
+            do {
+                let result = try await runner.run(.assistantAnalyze(tail: value))
+                sessionAnalysis = try decoder.decode(
+                    SessionAnalysis.self,
+                    from: Data(result.stdout.utf8)
+                )
+                setTransientNotice("Session 已分析")
+            } catch {
+                errorMessage = error.localizedDescription
+                notice = nil
+            }
+        }
+    }
+
+    func applySessionAnalysis() {
+        guard let analysis = sessionAnalysis,
+              !isSessionAnalyzing,
+              !isSessionApplying else {
+            return
+        }
+        isSessionApplying = true
+        errorMessage = nil
+        notice = "正在写入确认的 Todo 更新…"
+        Task {
+            defer { isSessionApplying = false }
+            do {
+                let result = try await runner.run(
+                    .assistantApply(analysisID: analysis.analysisId)
+                )
+                sessionApplyResult = try decoder.decode(
+                    SessionApplyResult.self,
+                    from: Data(result.stdout.utf8)
+                )
+                refreshWorkProjection()
+                setTransientNotice("Todo 已更新")
+            } catch {
+                errorMessage = error.localizedDescription
+                notice = nil
+                refreshWorkProjection()
+            }
+        }
+    }
+
+    func clearSessionAnalysis() {
+        guard !isSessionAnalyzing, !isSessionApplying else { return }
+        sessionAnalysis = nil
+        sessionApplyResult = nil
+        errorMessage = nil
     }
 
     private func runWorkMutation(

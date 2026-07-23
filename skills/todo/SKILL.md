@@ -1,6 +1,6 @@
 ---
 name: todo
-description: Manage the local Morning Brief daily work ledger when the user asks to record, review, edit, progress, complete, cancel, undo, or inspect Todo history, including work discovered from meetings and authorized APIs.
+description: Manage the local Morning Brief daily work ledger when the user asks to record, review, edit, progress, complete, cancel, undo, inspect Todo history, or recover a Claude session from pasted ending text and confirm its proposed Todo updates.
 ---
 
 # Todo
@@ -32,6 +32,9 @@ must be installed before continuing.
    it does not delete history.
 9. After a mutation, inspect the returned `item` and `event`. Report the title,
    resulting status, and event ID to the user.
+10. For Claude session recovery, run `assistant analyze` first and present its
+    summary, matches, and proposals. Run `assistant apply` only after the user
+    explicitly confirms those proposed updates.
 
 ## Status model
 
@@ -59,6 +62,8 @@ briefctl todo note ITEM_ID TEXT [common mutation flags]
 briefctl todo undo EVENT_ID [--actor human|agent|system] [--reason TEXT]
   [--idempotency-key KEY] [--expected-version VERSION]
 briefctl todo history [--date YYYY-MM-DD] [--days 7]
+briefctl assistant analyze --input SESSION_ENDING_FILE
+briefctl assistant apply ANALYSIS_ID
 ```
 
 Common mutation flags are `--actor`, `--reason`, repeatable `--evidence`,
@@ -110,3 +115,20 @@ briefctl todo status "$ITEM_ID" in_progress \
 If evidence conflicts, append the new evidence and reasoning, then make the
 status or detail change the Agent judges appropriate. The event rail preserves
 all records and supports undo.
+
+## Claude session recovery
+
+When the user pastes the ending of a Claude terminal session:
+
+1. Save the pasted text to a private temporary UTF-8 file.
+2. Run `briefctl assistant analyze --input FILE`.
+3. Present the returned `summary`, matched session ID, `todo_matches`, and every
+   proposed mutation. Do not reinterpret an analysis result as already applied.
+4. After explicit confirmation, run `briefctl assistant apply ANALYSIS_ID`.
+5. Report the applied event IDs and resulting Todo states. If a version
+   conflict occurs, re-run the analysis against the current ledger rather than
+   forcing the old proposal.
+
+The analyzer searches Claude project JSONL by distinctive ending fragments,
+verifies the parent session, includes all discovered subagent JSONL files, and
+uses the same configured Agent CLI as Morning Brief synthesis.

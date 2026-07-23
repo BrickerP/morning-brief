@@ -2,10 +2,17 @@ import SwiftUI
 
 private enum PanelLens: String, CaseIterable, Identifiable {
     case work
+    case agent
     case brief
 
     var id: String { rawValue }
-    var title: String { self == .work ? "工作台账" : "晨报" }
+    var title: String {
+        switch self {
+        case .work: "工作台账"
+        case .agent: "Agent"
+        case .brief: "晨报"
+        }
+    }
 }
 
 struct SourceChipView: View {
@@ -147,6 +154,8 @@ struct MenuBarPanelView: View {
             noticeBanner
             if selectedLens == .work {
                 WorkLedgerView()
+            } else if selectedLens == .agent {
+                AgentChatView()
             } else {
                 Group {
                     if hasContent {
@@ -197,7 +206,7 @@ struct MenuBarPanelView: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .accessibilityLabel("在工作台账和晨报之间切换")
+        .accessibilityLabel("在工作台账、Agent 和晨报之间切换")
     }
 
     private var hasUnreadAgentUpdate: Bool {
