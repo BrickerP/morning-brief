@@ -5,9 +5,10 @@ SRC="$ROOT/apps/MorningBrief/Sources"
 OUT="$ROOT/dist/MorningBrief.app"
 BIN="$OUT/Contents/MacOS/MorningBrief"
 SDK="$(xcrun --show-sdk-path)"
+MODULE_CACHE="${TMPDIR:-/tmp}/morningbrief-swift-module-cache"
 
 rm -rf "$OUT"
-mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
+mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources" "$MODULE_CACHE"
 
 cat > "$OUT/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -41,11 +42,12 @@ cat > "$OUT/Contents/Info.plist" <<'PLIST'
 PLIST
 
 echo "→ Compiling with SDK $SDK"
-swiftc \
+xcrun swiftc \
   -sdk "$SDK" \
   -target arm64-apple-macos14.0 \
   -O \
   -parse-as-library \
+  -module-cache-path "$MODULE_CACHE" \
   -o "$BIN" \
   "$SRC"/*.swift
 

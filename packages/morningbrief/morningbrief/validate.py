@@ -67,6 +67,60 @@ def _validate_run_fallback(data: dict[str, Any]) -> None:
     _require(data, ["date", "status", "started_at", "sources"])
 
 
+def _validate_work_ledger_fallback(data: dict[str, Any]) -> None:
+    _require(
+        data,
+        [
+            "schema_version",
+            "date",
+            "generated_at",
+            "read_only",
+            "items",
+            "recent_history",
+            "latest_agent_event",
+        ],
+    )
+    if data["schema_version"] != 1:
+        raise ValidationError("unsupported work ledger schema version")
+    if not isinstance(data["items"], list) or not isinstance(data["recent_history"], list):
+        raise ValidationError("items and recent_history must be lists")
+    items = list(data["items"])
+    for group in data["recent_history"]:
+        _require(group, ["date", "items"])
+        if not isinstance(group["items"], list):
+            raise ValidationError("recent history items must be a list")
+        items.extend(group["items"])
+
+    for item in items:
+        _require(
+            item,
+            ["id", "title", "detail", "status", "created_at", "updated_at", "version", "events"],
+        )
+        if item["status"] not in ("pending", "in_progress", "completed", "cancelled"):
+            raise ValidationError(f"bad work status: {item['status']}")
+        if not isinstance(item["events"], list):
+            raise ValidationError("work item events must be a list")
+        for event in item["events"]:
+            _require(
+                event,
+                [
+                    "sequence",
+                    "event_id",
+                    "item_id",
+                    "kind",
+                    "actor",
+                    "occurred_at",
+                    "payload",
+                    "reason",
+                    "evidence",
+                    "idempotency_key",
+                    "target_event_id",
+                ],
+            )
+            if not isinstance(event["sequence"], int) or event["sequence"] < 1:
+                raise ValidationError("event sequence must be a positive integer")
+
+
 def _validate(name: str, data: dict[str, Any], fallback) -> None:
     if jsonschema is not None:
         try:
@@ -90,3 +144,7 @@ def validate_brief_document(data: dict[str, Any]) -> None:
 
 def validate_run_state(data: dict[str, Any]) -> None:
     _validate("run_state.schema.json", data, _validate_run_fallback)
+
+
+def validate_work_ledger_snapshot(data: dict[str, Any]) -> None:
+    _validate("work_ledger_snapshot.schema.json", data, _validate_work_ledger_fallback)

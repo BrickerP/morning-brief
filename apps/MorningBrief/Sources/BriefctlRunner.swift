@@ -5,6 +5,11 @@ enum BriefctlCommand {
     case runFetchOnly
     case synth
     case doctor
+    case todoView(date: String?, days: Int)
+    case todoAdd(title: String, idempotencyKey: String)
+    case todoStatus(id: String, status: WorkStatus, expectedVersion: Int)
+    case todoNote(id: String, text: String, expectedVersion: Int, idempotencyKey: String)
+    case todoUndo(eventID: String, expectedVersion: Int)
 
     var arguments: [String] {
         switch self {
@@ -12,24 +17,61 @@ enum BriefctlCommand {
         case .runFetchOnly: ["run", "--skip-synth"]
         case .synth: ["synth"]
         case .doctor: ["doctor"]
+        case let .todoView(date, days):
+            if let date {
+                ["todo", "view", "--date", date, "--days", String(days)]
+            } else {
+                ["todo", "view", "--days", String(days)]
+            }
+        case let .todoAdd(title, idempotencyKey):
+            [
+                "todo", "add", title,
+                "--actor", "human",
+                "--idempotency-key", idempotencyKey
+            ]
+        case let .todoStatus(id, status, expectedVersion):
+            [
+                "todo", "status", id, status.rawValue,
+                "--actor", "human",
+                "--expected-version", String(expectedVersion),
+                "--idempotency-key", "ui:status:\(id):\(expectedVersion):\(status.rawValue)"
+            ]
+        case let .todoNote(id, text, expectedVersion, idempotencyKey):
+            [
+                "todo", "note", id, text,
+                "--actor", "human",
+                "--expected-version", String(expectedVersion),
+                "--idempotency-key", idempotencyKey
+            ]
+        case let .todoUndo(eventID, expectedVersion):
+            [
+                "todo", "undo", eventID,
+                "--actor", "human",
+                "--reason", "从 Morning Brief 撤销",
+                "--expected-version", String(expectedVersion),
+                "--idempotency-key", "ui:undo:\(eventID)"
+            ]
         }
     }
 }
 
 enum BriefctlError: LocalizedError {
     case executableNotFound
-    case failed(exitCode: Int32, stderr: String)
+    case failed(exitCode: Int32, diagnostic: String)
+    case invalidUTF8(stream: String)
 
     var errorDescription: String? {
         switch self {
         case .executableNotFound:
             "Could not find briefctl. Set MORNINGBRIEF_BRIEFCTL or install briefctl on PATH."
-        case let .failed(exitCode, stderr):
-            if stderr.isEmpty {
+        case let .failed(exitCode, diagnostic):
+            if diagnostic.isEmpty {
                 "briefctl exited with code \(exitCode)."
             } else {
-                stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                diagnostic.trimmingCharacters(in: .whitespacesAndNewlines)
             }
+        case let .invalidUTF8(stream):
+            "briefctl returned non-UTF-8 \(stream)."
         }
     }
 }
@@ -81,9 +123,10 @@ struct BriefctlRunner: Sendable {
                     if result.exitCode == 0 || result.exitCode == 75 {
                         continuation.resume(returning: result)
                     } else {
+                        let diagnostic = result.stderr.isEmpty ? result.stdout : result.stderr
                         continuation.resume(throwing: BriefctlError.failed(
                             exitCode: result.exitCode,
-                            stderr: result.stderr
+                            diagnostic: diagnostic
                         ))
                     }
                 } catch {
@@ -98,16 +141,50 @@ struct BriefctlRunner: Sendable {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("morningbrief-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: outputDirectory,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: outputDirectory.path
+        )
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
 
-        try process.run()
-        process.waitUntilExit()
+        let stdoutURL = outputDirectory.appendingPathComponent("stdout")
+        let stderrURL = outputDirectory.appendingPathComponent("stderr")
+        _ = FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
+        _ = FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+        let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+        let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+        process.standardOutput = stdoutHandle
+        process.standardError = stderrHandle
 
-        let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        do {
+            try process.run()
+            process.waitUntilExit()
+            try stdoutHandle.close()
+            try stderrHandle.close()
+        } catch {
+            try? stdoutHandle.close()
+            try? stderrHandle.close()
+            throw error
+        }
+
+        guard let stdout = String(
+            data: try Data(contentsOf: stdoutURL),
+            encoding: .utf8
+        ) else {
+            throw BriefctlError.invalidUTF8(stream: "stdout")
+        }
+        guard let stderr = String(
+            data: try Data(contentsOf: stderrURL),
+            encoding: .utf8
+        ) else {
+            throw BriefctlError.invalidUTF8(stream: "stderr")
+        }
 
         return BriefctlResult(exitCode: process.terminationStatus, stdout: stdout, stderr: stderr)
     }

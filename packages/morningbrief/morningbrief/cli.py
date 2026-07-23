@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import subprocess
 import sys
 
@@ -12,6 +13,20 @@ from morningbrief.paths import brief_dir, ensure_app_dirs
 from morningbrief.pipeline import run_pipeline, synth_brief
 from morningbrief.schedule import install_schedule, kickstart, uninstall_schedule
 from morningbrief.timeutil import date_str, local_today
+from morningbrief.work_ledger import LedgerError, WorkLedger
+
+
+def _add_mutation_arguments(parser: argparse.ArgumentParser, *, expected_version: bool = True) -> None:
+    parser.add_argument("--actor", choices=("human", "agent", "system"), default="human")
+    parser.add_argument("--reason")
+    parser.add_argument("--evidence", action="append", default=[])
+    parser.add_argument("--idempotency-key")
+    if expected_version:
+        parser.add_argument("--expected-version", type=int)
+
+
+def _print_json(data: object) -> None:
+    print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -33,9 +48,115 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("uninstall-schedule", help="Remove launchd job")
     sub.add_parser("kickstart", help="Force-start launchd job now")
 
+    p_todo = sub.add_parser("todo", help="View and update the work ledger")
+    todo_sub = p_todo.add_subparsers(dest="todo_cmd", required=True)
+
+    p_todo_view = todo_sub.add_parser("view", help="Publish and return a daily projection")
+    p_todo_view.add_argument("--date", help="YYYY-MM-DD (default: local today)")
+    p_todo_view.add_argument("--days", type=int, default=7)
+
+    p_todo_add = todo_sub.add_parser("add", help="Capture a pending work item")
+    p_todo_add.add_argument("title")
+    p_todo_add.add_argument("--detail", default="")
+    p_todo_add.add_argument("--item-id")
+    _add_mutation_arguments(p_todo_add, expected_version=False)
+
+    p_todo_edit = todo_sub.add_parser("edit", help="Edit a work item's title or detail")
+    p_todo_edit.add_argument("item_id")
+    p_todo_edit.add_argument("--title")
+    p_todo_edit.add_argument("--detail")
+    _add_mutation_arguments(p_todo_edit)
+
+    p_todo_status = todo_sub.add_parser("status", help="Set a work item's status")
+    p_todo_status.add_argument("item_id")
+    p_todo_status.add_argument(
+        "status", choices=("pending", "in_progress", "completed", "cancelled")
+    )
+    _add_mutation_arguments(p_todo_status)
+
+    p_todo_note = todo_sub.add_parser("note", help="Append progress, a blocker, or a next step")
+    p_todo_note.add_argument("item_id")
+    p_todo_note.add_argument("text")
+    _add_mutation_arguments(p_todo_note)
+
+    p_todo_undo = todo_sub.add_parser("undo", help="Revert one mutation event")
+    p_todo_undo.add_argument("event_id")
+    p_todo_undo.add_argument("--actor", choices=("human", "agent", "system"), default="human")
+    p_todo_undo.add_argument("--reason")
+    p_todo_undo.add_argument("--idempotency-key")
+    p_todo_undo.add_argument("--expected-version", type=int)
+
+    p_todo_history = todo_sub.add_parser("history", help="Return recent terminal work")
+    p_todo_history.add_argument("--date", help="YYYY-MM-DD (default: local today)")
+    p_todo_history.add_argument("--days", type=int, default=7)
+
     args = parser.parse_args(argv)
     ensure_app_dirs()
     cfg = load_config()
+
+    if args.cmd == "todo":
+        try:
+            ledger = WorkLedger(timezone_name=cfg.timezone)
+            if args.todo_cmd == "view":
+                result = ledger.view(args.date, days=args.days)
+            elif args.todo_cmd == "add":
+                result = ledger.add(
+                    args.title,
+                    detail=args.detail,
+                    actor=args.actor,
+                    reason=args.reason,
+                    evidence=args.evidence,
+                    item_id=args.item_id,
+                    idempotency_key=args.idempotency_key,
+                )
+            elif args.todo_cmd == "edit":
+                result = ledger.edit(
+                    args.item_id,
+                    title=args.title,
+                    detail=args.detail,
+                    actor=args.actor,
+                    reason=args.reason,
+                    evidence=args.evidence,
+                    idempotency_key=args.idempotency_key,
+                    expected_version=args.expected_version,
+                )
+            elif args.todo_cmd == "status":
+                result = ledger.set_status(
+                    args.item_id,
+                    args.status,
+                    actor=args.actor,
+                    reason=args.reason,
+                    evidence=args.evidence,
+                    idempotency_key=args.idempotency_key,
+                    expected_version=args.expected_version,
+                    occurred_at=None,
+                )
+            elif args.todo_cmd == "note":
+                result = ledger.add_progress(
+                    args.item_id,
+                    args.text,
+                    actor=args.actor,
+                    reason=args.reason,
+                    evidence=args.evidence,
+                    idempotency_key=args.idempotency_key,
+                    expected_version=args.expected_version,
+                    occurred_at=None,
+                )
+            elif args.todo_cmd == "undo":
+                result = ledger.undo(
+                    event_id=args.event_id,
+                    actor=args.actor,
+                    reason=args.reason,
+                    idempotency_key=args.idempotency_key,
+                    expected_version=args.expected_version,
+                )
+            else:
+                result = ledger.history(args.date, days=args.days)
+        except (LedgerError, OSError, sqlite3.Error, ValueError) as error:
+            _print_json({"error": {"type": error.__class__.__name__, "message": str(error)}})
+            raise SystemExit(2)
+        _print_json(result)
+        raise SystemExit(0)
 
     if args.cmd == "doctor":
         raise SystemExit(run_doctor())

@@ -1,4 +1,4 @@
-.PHONY: bootstrap doctor run run-fetch test install-schedule open typecheck-swift app
+.PHONY: bootstrap doctor run run-fetch test test-swift-runner install-schedule open typecheck-swift app
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -14,6 +14,9 @@ run-fetch:
 
 test:
 	packages/morningbrief/.venv/bin/python scripts/run_tests.py
+
+test-swift-runner:
+	./scripts/test_swift_runner.sh
 
 install-schedule:
 	./bin/briefctl install-schedule

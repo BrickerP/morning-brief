@@ -22,10 +22,33 @@ briefctl run                # 含 agent 合成（需已 login）
 briefctl install-schedule   # 每天 07:30
 ```
 
+### Agent 工作台账
+
+`briefctl todo` 是人和本地 Agent 共用的结构化入口。SQLite 事件只追加，
+每天的 `work.json` 是可重建的原子投影；不要直接编辑这两个文件。
+
+```bash
+briefctl todo add "评估新支付回调" --actor human
+briefctl todo status ITEM_ID in_progress --actor agent \
+  --reason "发现待验证链路" --evidence "API-142" --idempotency-key "api-142-start"
+briefctl todo note ITEM_ID "样本 12/12 已核对" --actor agent \
+  --evidence "probe-20260723.json" --expected-version 2
+briefctl todo status ITEM_ID completed --expected-version 3
+briefctl todo view
+briefctl todo history --days 7
+briefctl todo undo EVENT_ID --reason "恢复上一个状态"
+```
+
+所有命令向 stdout 输出 JSON。Agent 写入时应提供稳定的
+`--idempotency-key`，并优先带上最近投影中的 `version` 作为
+`--expected-version`；外部数据的来源放在可重复的 `--evidence` 中，判断依据放在
+`--reason` 中。完整约定见 [`skills/morning-brief-todo/`](skills/morning-brief-todo/)。
+
 | 路径 | 用途 |
 |------|------|
 | `~/.config/morning-brief/config.toml` | 配置（首次自动生成） |
 | `~/Library/Application Support/MorningBrief/briefs/` | 每日产物 |
+| `~/Library/Application Support/MorningBrief/work-ledger.sqlite3` | 只追加的工作事件账本 |
 | `~/Library/Application Support/MorningBrief/briefctl.path` | App 找 CLI |
 
 **无完整 Xcode 也可以**：只需 Command Line Tools（`xcode-select --install`）。`scripts/build_app.sh` 用 `swiftc` 出 `.app`。

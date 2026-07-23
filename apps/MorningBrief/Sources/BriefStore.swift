@@ -7,11 +7,13 @@ final class BriefStore: ObservableObject {
     @Published private(set) var status: BriefStatus = .idle
     @Published private(set) var brief: BriefDocument?
     @Published private(set) var run: RunDocument?
+    @Published private(set) var work: WorkDocument?
     @Published private(set) var displayDate: String = ""
     @Published private(set) var isStale = false
     @Published private(set) var isRefreshing = false
     @Published private(set) var isSynthesizing = false
     @Published private(set) var isDoctorRunning = false
+    @Published private(set) var isWorkMutating = false
 
     /// Day currently being viewed (`yyyy-MM-dd`). Defaults to today in `BriefPaths.dayTimeZone`.
     @Published private(set) var selectedDate: String = BriefPaths.todayDateString()
@@ -22,7 +24,7 @@ final class BriefStore: ObservableObject {
     var isBusy: Bool { isRefreshing || isSynthesizing }
 
     /// True when `selectedDate` is today; pipeline commands only operate on today.
-    var isViewingToday: Bool { selectedDate == BriefPaths.todayDateString() }
+    var isViewingToday: Bool { selectedDate == lastKnownToday }
 
     @Published var notice: String?
     @Published var errorMessage: String?
@@ -31,13 +33,15 @@ final class BriefStore: ObservableObject {
     private var watcher: BriefWatcher!
     private let decoder = JSONDecoder()
     private var noticeClearTask: Task<Void, Never>?
+    private var workProjectionDatesInFlight = Set<String>()
+    private var lastKnownToday = BriefPaths.todayDateString()
 
     private var dayDirectory: URL { BriefPaths.dayDirectory(forDateString: selectedDate) }
 
     /// Selectable days for navigation: available days plus today (even if empty), sorted ascending.
     private var navigableDates: [String] {
         var set = Set(availableDates)
-        set.insert(BriefPaths.todayDateString())
+        set.insert(lastKnownToday)
         return set.sorted()
     }
 
@@ -61,6 +65,7 @@ final class BriefStore: ObservableObject {
         refreshAvailableDates()
         reloadFromDisk()
         watcher.watch(directory: dayDirectory)
+        refreshWorkProjection()
     }
 
     deinit {
@@ -79,6 +84,7 @@ final class BriefStore: ObservableObject {
         selectedDate = date
         reloadFromDisk()
         watcher.watch(directory: dayDirectory)
+        refreshWorkProjection()
     }
 
     /// Move to the previous (earlier) available day; stays put before the earliest.
@@ -127,6 +133,18 @@ final class BriefStore: ObservableObject {
             runStatus = runDoc.briefStatus
         }
         run = loadedRun
+
+        let workURL = BriefPaths.workJSON(in: directory)
+        if let data = try? Data(contentsOf: workURL) {
+            do {
+                work = try decoder.decode(WorkDocument.self, from: data)
+            } catch {
+                work = nil
+                errorMessage = "work.json 解析失败: \(error.localizedDescription)"
+            }
+        } else {
+            work = nil
+        }
 
         isStale = computeStaleness(for: loadedBrief)
 
@@ -222,6 +240,114 @@ final class BriefStore: ObservableObject {
                 notice = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             } catch {
                 errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func refreshWorkProjection() {
+        let requestedDate = selectedDate
+        let requestingToday = requestedDate == lastKnownToday
+        let requestKey = requestingToday ? "__today__" : requestedDate
+        guard workProjectionDatesInFlight.insert(requestKey).inserted else { return }
+        Task {
+            defer { workProjectionDatesInFlight.remove(requestKey) }
+            do {
+                let result = try await runner.run(
+                    .todoView(date: requestingToday ? nil : requestedDate, days: 7)
+                )
+                if requestingToday {
+                    let document = try decoder.decode(
+                        WorkDocument.self,
+                        from: Data(result.stdout.utf8)
+                    )
+                    lastKnownToday = document.date
+                    if selectedDate == requestedDate {
+                        selectedDate = document.date
+                        watcher.watch(directory: dayDirectory)
+                    }
+                }
+                refreshAvailableDates()
+                if selectedDate == requestedDate || (requestingToday && isViewingToday) {
+                    reloadFromDisk()
+                }
+            } catch {
+                if selectedDate == requestedDate {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func captureWork(
+        title: String,
+        idempotencyKey: String,
+        onSuccess: @escaping () -> Void
+    ) {
+        runWorkMutation(
+            .todoAdd(title: title, idempotencyKey: idempotencyKey),
+            successNotice: "已记录",
+            onSuccess: onSuccess
+        )
+    }
+
+    func setWorkStatus(itemID: String, status: WorkStatus, version: Int) {
+        runWorkMutation(
+            .todoStatus(id: itemID, status: status, expectedVersion: version),
+            successNotice: "状态已更新"
+        )
+    }
+
+    func appendProgress(
+        itemID: String,
+        text: String,
+        version: Int,
+        idempotencyKey: String,
+        onSuccess: @escaping () -> Void
+    ) {
+        runWorkMutation(
+            .todoNote(
+                id: itemID,
+                text: text,
+                expectedVersion: version,
+                idempotencyKey: idempotencyKey
+            ),
+            successNotice: "进展已追加",
+            onSuccess: onSuccess
+        )
+    }
+
+    func undo(eventID: String) {
+        guard let item = work?.allItems.first(where: {
+            $0.events.contains { $0.eventId == eventID }
+        }) else {
+            errorMessage = "找不到要撤销的变更"
+            return
+        }
+        runWorkMutation(
+            .todoUndo(eventID: eventID, expectedVersion: item.version),
+            successNotice: "已撤销"
+        )
+    }
+
+    private func runWorkMutation(
+        _ command: BriefctlCommand,
+        successNotice: String,
+        onSuccess: (() -> Void)? = nil
+    ) {
+        guard isViewingToday, !isWorkMutating else { return }
+        isWorkMutating = true
+        errorMessage = nil
+        Task {
+            defer { isWorkMutating = false }
+            do {
+                _ = try await runner.run(command)
+                reloadFromDisk()
+                refreshAvailableDates()
+                setTransientNotice(successNotice)
+                onSuccess?()
+            } catch {
+                errorMessage = error.localizedDescription
+                refreshWorkProjection()
             }
         }
     }

@@ -2,39 +2,41 @@
 
 ## Source of truth
 - Status: Active
-- Last refreshed: 2026-07-21
-- Primary product surfaces: macOS menu bar extra panel (single window-style dropdown)
-- Evidence reviewed: `apps/MorningBrief/Sources/*`, approved Morning Brief plan, Apple MenuBarExtra + LSUIElement guidance
+- Last refreshed: 2026-07-23
+- Primary product surfaces: macOS menu bar extra panel with `工作台账 | 晨报` lenses
+- Evidence reviewed: `apps/MorningBrief/Sources/*`, `docs/creative/01-brainstorm.md` through `04-prototype.md`, Apple MenuBarExtra + LSUIElement guidance
 
 ## Brand
-- Personality: Calm, editorial, morning ritual — like opening a well-typeset newspaper over coffee, not a chatbot dashboard
-- Trust signals: Clear date header, readable typography, honest source status chips, subtle system-native chrome
-- Avoid: Purple gradients, neon accents, “AI slop” aesthetics, mascot icons, dense widget grids, shimmer loaders, chat bubbles
+- Personality: Calm editorial briefing plus a quiet operator's work ledger, not a chatbot dashboard
+- Trust signals: Clear date header, readable typography, honest source status chips, visible agent actors/reasons/evidence, reversible mutations, subtle system-native chrome
+- Avoid: Purple gradients, neon accents, “AI slop” aesthetics, mascot icons, dense widget grids, shimmer loaders, chat bubbles, Kanban squeezed into a menu
 
 ## Product goals
-- Goals: Surface today’s brief at a glance from the menu bar; reload when artifacts change; trigger refresh/doctor without leaving the flow
-- Non-goals: Full markdown editor, in-app settings chrome, Dock presence, multi-window browsing, notification spam
-- Success signals: User opens panel once each morning, reads sections without scrolling fatigue, trusts source chips and staleness badge
+- Goals: Surface today’s brief at a glance; capture and maintain today's work throughout the day; expose pending/in-progress/completed/cancelled state; retain progress and recent completion history; let a local agent mutate work through inspectable, reversible operations
+- Non-goals: Full markdown editor, project-management hierarchy, calendar/timeboxing, generic connector marketplace, embedded agent chat, Dock presence, multi-window browsing, notification spam
+- Success signals: User captures meeting work before context is lost; one opening answers what is pending/active/completed; agent changes remain explainable and undoable; the brief stays readable without competing with the ledger
 
 ## Personas and jobs
 - Primary personas: Single user (Yupeng) starting the day on macOS
-- User jobs: “What happened overnight?” “Are my sources healthy?” “Regenerate if stale” “Open the folder if I need raw files”
-- Key contexts of use: Early morning, low cognitive load, often before full desktop setup; panel may stay open while reading
+- User jobs: “What happened overnight?” “What am I doing now?” “What changed or is blocked?” “What did I finish recently?” “Let my agent update this safely from external evidence”
+- Key contexts of use: Early morning briefing; meetings that create rough commitments; repeated daytime context switches; end-of-day or follow-up progress recall
 
 ## Information architecture
-- Primary navigation: None — single panel only
-- Core routes/screens: Menu bar icon → panel (header → notices → sources → sections → actions)
-- Content hierarchy: Date → status/staleness → source health → brief sections (title + body) → utility actions
+- Primary navigation: One segmented lens selector inside a single panel: `工作台账 | 晨报`
+- Core routes/screens: Menu bar icon → selected lens; work lens → overview → item event trail or recent history; brief lens → existing hero/full-text flow
+- Content hierarchy: Shared date/lens → work quick capture and state groups or brief content → contextual footer actions
 
 ## Design principles
 - Principle 1: **Quiet by default** — icon stays hierarchical SF Symbol; color only for status/degraded/stale
 - Principle 2: **Readable first** — generous line length (~420pt panel), section titles as anchors, body in secondary tone
 - Principle 3: **System-native** — `windowBackgroundColor`, bordered buttons, no custom chrome fighting macOS
-- Tradeoffs: Rich markdown deferred to inline-only parsing for speed; full MD features sacrificed for calm rendering
+- Principle 4: **Autonomous but observable** — the agent may decide and mutate without approval dialogs, but every change exposes actor, reason, evidence, and undo
+- Principle 5: **Append progress** — decisions, blockers, and next steps become chronological events instead of overwritten notes
+- Tradeoffs: Rich markdown remains secondary; the MVP favors four states and recent history over projects, deadlines, priorities, drag ordering, or deep analytics
 
 ## Visual language
-- Color: Neutrals from system palette; green/orange/red reserved for source chips; orange stale badge; blue tint for informational notices (not errors)
-- Typography: `title3.semibold` app title, `headline` section titles, `body`/`secondary` for content, `caption` for chips
+- Color: Neutrals from system palette; active blue for in-progress/unread agent changes; completion green; cancelled gray; error red remains reserved for failures
+- Typography: `title3.semibold` app/item title, `headline` section titles, `callout` task/progress text, `caption` state/actor labels, monospaced captions for timestamps/evidence IDs
 - Spacing/layout rhythm: 20pt panel padding, 16pt vertical sections, 8pt chip spacing, 20pt between brief sections
 - Shape/radius/elevation: 8pt rounded notice boxes; capsule chips; no drop shadows on panel (MenuBarExtra window provides depth)
 - Motion: None intentional — status icon may use system hierarchical rendering only
@@ -42,20 +44,20 @@
 
 ## Components
 - Existing components to reuse: SwiftUI `MenuBarExtra`, `ScrollView`, `Divider`, system `bordered` buttons
-- New/changed components: `MenuBarPanelView`, `BriefSectionView`, `SourceChipView`, `FlowLayout` (chip wrap)
-- Variants and states: Empty brief, loading/running (disabled Refresh), notice vs error banners, stale badge on icon + panel
+- New/changed components: lens selector, work overview, quick capture, work row, item detail, event rail, recent-history view, plus existing brief components
+- Variants and states: Empty brief/workday, pending, in-progress, completed, cancelled, read-only historical day, mutation in flight, mutation error followed by projection reconciliation, existing brief loading/degraded/error states
 - Token/component ownership: Defined in Swift sources under `apps/MorningBrief/Sources/`
 
 ## Accessibility
 - Target standard: macOS HIG + WCAG-minded contrast using system semantic colors
-- Keyboard/focus behavior: Quit supports ⌘Q shortcut; buttons are standard focusable controls
+- Keyboard/focus behavior: Quit supports ⌘Q; Enter submits capture/progress; standard controls remain focusable. Dedicated capture/clear shortcuts are deferred.
 - Contrast/readability: Primary/secondary text pairing; error text on light red background
-- Screen-reader semantics: Icon accessibility label includes status; chips label name + status
+- Screen-reader semantics: Status always includes text/icon; work rows announce title, status, last actor/time, and history availability; historical mode announces read-only
 - Reduced motion and sensory considerations: No autoplay animation; static layout
 
 ## Responsive behavior
 - Supported breakpoints/devices: Fixed 420pt panel width on macOS 14+
-- Layout adaptations: Section body scrolls when content exceeds ~420pt height; chips wrap via `FlowLayout`
+- Layout adaptations: Header/lens/footer remain stable; the selected lens owns the middle scroll; work detail and history replace the overview rather than stacking into one feed
 - Touch/hover differences: N/A (pointer/hover menu bar context)
 
 ## Interaction states
@@ -65,18 +67,20 @@
 - Success: Ready newspaper icon; optional blue notice (e.g. “已在生成” for exit 75)
 - Disabled: Refresh/Doctor disabled during respective subprocess
 - Offline/slow network: Reflected via source chip status and `degraded`/`error` run states from artifacts
+- Work mutation: Controls pause during the local command; drafts clear only after success. Failures retain typed text, show the diagnostic, and regenerate the projection to reconcile any committed event.
+- Agent update: A quiet unread dot on the work lens and a chronological event with actor/reason/evidence; no pulsing or approval modal
 
 ## Content voice
-- Tone: Brief, neutral, morning-appropriate; Chinese notice for already-running generation
-- Terminology: “Morning Brief”, “Sources”, “Stale”, “Refresh”, “Doctor” aligned with CLI
+- Tone: Brief, neutral, and operational; Chinese work-ledger language coexists with the Morning Brief brand
+- Terminology: `待处理`, `进行中`, `已完成`, `取消`, `进展`, `证据`, and `撤销`; brief terminology remains unchanged
 - Microcopy rules: Non-errors use secondary/blue styling; errors use red; avoid exclamation-heavy copy
 
 ## Implementation constraints
-- Framework/styling system: SwiftUI on macOS 14+, AppKit only for process/terminate/open
+- Framework/styling system: SwiftUI on macOS 14+, AppKit only for process/terminate/open; Python `briefctl` owns the structured agent mutation surface
 - Design-token constraints: No external design system; system colors and fonts only
-- Performance constraints: 2s poll + directory watch; lazy section stack in scroll view
+- Performance constraints: 2s poll + directory watch; atomic `work.json` projections; small local event ledger; no network dependency for ordinary work operations
 - Compatibility constraints: LSUIElement agent (no Dock); MenuBarExtra `.window` style only
-- Test/screenshot expectations: Manual verification with sample `brief.json` in Application Support path
+- Test/screenshot expectations: Python event/CLI/concurrency tests; Swift typecheck/build; isolated CLI journey; manual panel verification with synthetic `work.json` and existing brief artifacts
 
 ## Open questions
 - [ ] Full markdown (lists, links, headings) vs inline-only — currently inline-only preserving whitespace / owner: user / impact: rendering fidelity

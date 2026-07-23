@@ -226,13 +226,201 @@ enum BriefDateParser {
     }()
 }
 
+enum WorkStatus: String, Codable, CaseIterable, Identifiable {
+    case pending
+    case inProgress = "in_progress"
+    case completed
+    case cancelled
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .pending: "待处理"
+        case .inProgress: "进行中"
+        case .completed: "已完成"
+        case .cancelled: "已取消"
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .pending: "circle"
+        case .inProgress: "circle.fill"
+        case .completed: "checkmark.circle.fill"
+        case .cancelled: "xmark.circle"
+        }
+    }
+}
+
+struct WorkEvent: Codable, Identifiable, Hashable {
+    let sequence: Int
+    let eventId: String
+    let itemId: String
+    let kind: String
+    let actor: String
+    let occurredAt: String
+    let payload: [String: FlexibleJSON]
+    let reason: String?
+    let evidence: [String]
+    let idempotencyKey: String?
+    let targetEventId: String?
+
+    var id: String { eventId }
+
+    enum CodingKeys: String, CodingKey {
+        case sequence
+        case eventId = "event_id"
+        case itemId = "item_id"
+        case kind, actor
+        case occurredAt = "occurred_at"
+        case payload, reason, evidence
+        case idempotencyKey = "idempotency_key"
+        case targetEventId = "target_event_id"
+    }
+
+    var summary: String {
+        switch kind {
+        case "created":
+            return "创建任务"
+        case "edited":
+            return "更新了任务信息"
+        case "status_changed":
+            if case .string(let status)? = payload["status"],
+               let workStatus = WorkStatus(rawValue: status) {
+                return "状态更新为\(workStatus.title)"
+            }
+            return "更新了状态"
+        case "progress_added":
+            if case .string(let text)? = payload["text"] { return text }
+            return "追加了进展"
+        case "reverted":
+            return "撤销了一次变更"
+        default:
+            return kind
+        }
+    }
+
+    var occurredAtDate: Date? {
+        BriefDateParser.iso8601Fractional.date(from: occurredAt)
+            ?? BriefDateParser.iso8601.date(from: occurredAt)
+    }
+}
+
+struct WorkItem: Codable, Identifiable, Hashable {
+    let id: String
+    let title: String
+    let detail: String
+    let status: WorkStatus
+    let createdAt: String
+    let updatedAt: String
+    let version: Int
+    let terminalDate: String?
+    let events: [WorkEvent]
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, detail, status, version, events
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case terminalDate = "terminal_date"
+    }
+
+    var lastEventDate: Date? {
+        BriefDateParser.iso8601Fractional.date(from: updatedAt)
+            ?? BriefDateParser.iso8601.date(from: updatedAt)
+    }
+
+    var lastProgress: String? {
+        for event in events.reversed() where event.kind == "progress_added" && !isEventReverted(event) {
+            if case .string(let text)? = event.payload["text"] { return text }
+        }
+        return nil
+    }
+
+    func isEventReverted(_ event: WorkEvent) -> Bool {
+        events.contains { $0.kind == "reverted" && $0.targetEventId == event.eventId }
+    }
+
+    func summary(for target: WorkEvent) -> String {
+        if target.kind == "status_changed",
+           case .string(let rawStatus)? = target.payload["status"],
+           let nextStatus = WorkStatus(rawValue: rawStatus) {
+            var previousStatus = WorkStatus.pending
+            for event in events {
+                if event.eventId == target.eventId { break }
+                guard event.kind == "status_changed", !isEventReverted(event),
+                      case .string(let raw)? = event.payload["status"],
+                      let status = WorkStatus(rawValue: raw) else {
+                    continue
+                }
+                previousStatus = status
+            }
+            return "状态：\(previousStatus.title) → \(nextStatus.title)"
+        }
+        if target.kind == "edited" {
+            let fields = [
+                target.payload["title"] == nil ? nil : "标题",
+                target.payload["detail"] == nil ? nil : "说明",
+            ].compactMap { $0 }
+            return fields.isEmpty ? target.summary : "更新：\(fields.joined(separator: "、"))"
+        }
+        return target.summary
+    }
+}
+
+struct WorkHistoryDay: Codable, Identifiable, Hashable {
+    let date: String
+    let items: [WorkItem]
+
+    var id: String { date }
+    var completed: [WorkItem] { items.filter { $0.status == .completed } }
+    var cancelled: [WorkItem] { items.filter { $0.status == .cancelled } }
+}
+
+struct WorkDocument: Codable {
+    let schemaVersion: Int
+    let date: String
+    let generatedAt: String
+    let readOnly: Bool
+    let items: [WorkItem]
+    let recentHistory: [WorkHistoryDay]
+    let latestAgentEvent: WorkEvent?
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case date
+        case generatedAt = "generated_at"
+        case readOnly = "read_only"
+        case items
+        case recentHistory = "recent_history"
+        case latestAgentEvent = "latest_agent_event"
+    }
+
+    var pending: [WorkItem] { items.filter { $0.status == .pending } }
+    var inProgress: [WorkItem] { items.filter { $0.status == .inProgress } }
+    var completedToday: [WorkItem] {
+        items.filter { $0.status == .completed && $0.terminalDate == date }
+    }
+    var allItems: [WorkItem] {
+        items + recentHistory.flatMap(\.items)
+    }
+
+    var latestReversibleEvent: WorkEvent? {
+        let events = allItems.flatMap(\.events)
+        let revertedIDs = Set(events.compactMap { $0.kind == "reverted" ? $0.targetEventId : nil })
+        return events
+            .filter { !revertedIDs.contains($0.eventId) && $0.kind != "reverted" }
+            .max { $0.sequence < $1.sequence }
+    }
+}
+
 enum BriefPaths {
     static let appSupport = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/MorningBrief/briefs", isDirectory: true)
 
-    /// Timezone used to derive `yyyy-MM-dd` day-folder keys.
-    /// MUST stay aligned with briefctl's default `config.timezone` (Python `AppConfig.timezone`),
-    /// otherwise the app and the CLI would disagree on which folder is "today".
+    /// Fallback timezone used before briefctl reports the configured local day.
+    /// Work projection refreshes omit --date for "today", so Python remains the
+    /// authority when the configured timezone differs from this fallback.
     static let dayTimeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
 
     private static let dayFormatter: DateFormatter = {
@@ -291,5 +479,9 @@ enum BriefPaths {
 
     static func runJSON(in directory: URL) -> URL {
         directory.appendingPathComponent("run.json")
+    }
+
+    static func workJSON(in directory: URL) -> URL {
+        directory.appendingPathComponent("work.json")
     }
 }

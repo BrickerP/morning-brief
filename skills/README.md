@@ -12,3 +12,8 @@ These four fetch skills ship **inside** `morning-brief` so `./scripts/bootstrap.
 `briefctl` defaults `skill_script` to these paths (`skills/<name>/scripts/...`). You can still override in `~/.config/morning-brief/config.toml`.
 
 Standalone skill installs (for Cursor/Claude skill directories) can clone the four repos above into `~/.agents/skills/` or `~/.claude/skills/` if you want them outside this monorepo.
+
+# Bundled skills
+
+- `morning-brief-todo/` — 让本地 Agent 通过 `briefctl todo` 查询、更新和撤销
+  Morning Brief 工作台账，并为外部信息附加理由与证据。

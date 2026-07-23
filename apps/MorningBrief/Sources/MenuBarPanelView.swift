@@ -1,5 +1,13 @@
 import SwiftUI
 
+private enum PanelLens: String, CaseIterable, Identifiable {
+    case work
+    case brief
+
+    var id: String { rawValue }
+    var title: String { self == .work ? "工作台账" : "晨报" }
+}
+
 struct SourceChipView: View {
     let source: BriefSourceChip
 
@@ -121,6 +129,13 @@ struct MenuBarPanelView: View {
     @State private var isFullExpanded = false
     @State private var fullContentOpacity: Double = 0
     @State private var highlightedSectionID: String?
+    @AppStorage("MorningBrief.selectedLens") private var selectedLensRaw = PanelLens.brief.rawValue
+    @AppStorage("MorningBrief.lastSeenAgentEvent") private var lastSeenAgentEventID = ""
+
+    private var selectedLens: PanelLens {
+        get { PanelLens(rawValue: selectedLensRaw) ?? .brief }
+        nonmutating set { selectedLensRaw = newValue.rawValue }
+    }
 
     private var hasContent: Bool { store.brief?.hasReadableContent ?? false }
     private var readableSections: [BriefSection] { store.brief?.readableSections ?? [] }
@@ -128,17 +143,72 @@ struct MenuBarPanelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            lensPicker
             noticeBanner
-            if hasContent {
-                contentScroll
+            if selectedLens == .work {
+                WorkLedgerView()
             } else {
-                emptyState
+                Group {
+                    if hasContent {
+                        contentScroll
+                    } else {
+                        emptyState
+                    }
+                }
+                footer
             }
-            footer
         }
         .padding(20)
         .frame(width: 440, height: 600)
         .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            if selectedLens == .work {
+                store.refreshWorkProjection()
+                markAgentUpdateSeen()
+            }
+        }
+        .onChange(of: selectedLensRaw) {
+            if selectedLens == .work {
+                store.refreshWorkProjection()
+                markAgentUpdateSeen()
+            }
+        }
+        .onChange(of: store.work?.latestAgentEvent?.eventId) {
+            if selectedLens == .work { markAgentUpdateSeen() }
+        }
+    }
+
+    private var lensPicker: some View {
+        Picker("视图", selection: Binding(
+            get: { selectedLens },
+            set: { selectedLens = $0 }
+        )) {
+            ForEach(PanelLens.allCases) { lens in
+                HStack(spacing: 5) {
+                    Text(lens.title)
+                    if lens == .work, hasUnreadAgentUpdate {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 5, height: 5)
+                    }
+                }
+                .tag(lens)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .accessibilityLabel("在工作台账和晨报之间切换")
+    }
+
+    private var hasUnreadAgentUpdate: Bool {
+        guard let eventID = store.work?.latestAgentEvent?.eventId else { return false }
+        return eventID != lastSeenAgentEventID
+    }
+
+    private func markAgentUpdateSeen() {
+        if let eventID = store.work?.latestAgentEvent?.eventId {
+            lastSeenAgentEventID = eventID
+        }
     }
 
     // MARK: Header

@@ -201,10 +201,8 @@ def load_config(path: Path | None = None) -> AppConfig:
     ensure_app_dirs()
     cfg_path = path or CONFIG_PATH
     if not cfg_path.exists():
-        example = REPO_ROOT / "configs" / "config.example.toml"
-        example.parent.mkdir(parents=True, exist_ok=True)
         text = example_toml()
-        example.write_text(text, encoding="utf-8")
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(text, encoding="utf-8")
         return _from_dict(tomllib.loads(text))
 

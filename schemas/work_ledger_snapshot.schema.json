@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Morning Brief work ledger projection",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "date",
+    "generated_at",
+    "read_only",
+    "items",
+    "recent_history",
+    "latest_agent_event"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "date": {"type": "string", "format": "date"},
+    "generated_at": {"type": "string"},
+    "read_only": {"type": "boolean"},
+    "items": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+    "recent_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["date", "items"],
+        "properties": {
+          "date": {"type": "string", "format": "date"},
+          "items": {"type": "array", "items": {"$ref": "#/$defs/item"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "latest_agent_event": {
+      "anyOf": [{"$ref": "#/$defs/event"}, {"type": "null"}]
+    }
+  },
+  "$defs": {
+    "event": {
+      "type": "object",
+      "required": [
+        "sequence",
+        "event_id",
+        "item_id",
+        "kind",
+        "actor",
+        "occurred_at",
+        "payload",
+        "reason",
+        "evidence",
+        "idempotency_key",
+        "target_event_id"
+      ],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "event_id": {"type": "string"},
+        "item_id": {"type": "string"},
+        "kind": {
+          "enum": ["created", "edited", "status_changed", "progress_added", "reverted"]
+        },
+        "actor": {"enum": ["human", "agent", "system"]},
+        "occurred_at": {"type": "string"},
+        "payload": {"type": "object"},
+        "reason": {"type": ["string", "null"]},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "idempotency_key": {"type": ["string", "null"]},
+        "target_event_id": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "item": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "detail",
+        "status",
+        "created_at",
+        "updated_at",
+        "version",
+        "events",
+        "terminal_date"
+      ],
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string", "minLength": 1},
+        "detail": {"type": "string"},
+        "status": {"enum": ["pending", "in_progress", "completed", "cancelled"]},
+        "created_at": {"type": "string"},
+        "updated_at": {"type": "string"},
+        "version": {"type": "integer", "minimum": 1},
+        "terminal_date": {"type": ["string", "null"]},
+        "events": {"type": "array", "items": {"$ref": "#/$defs/event"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

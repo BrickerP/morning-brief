@@ -6,6 +6,7 @@ final class BriefWatcher {
     private var watchedDirectory: URL?
     private var lastBriefSignature: FileSignature?
     private var lastRunSignature: FileSignature?
+    private var lastWorkSignature: FileSignature?
     private let onChange: () -> Void
 
     init(onChange: @escaping () -> Void) {
@@ -17,6 +18,7 @@ final class BriefWatcher {
         watchedDirectory = directory
         lastBriefSignature = nil
         lastRunSignature = nil
+        lastWorkSignature = nil
 
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -52,6 +54,7 @@ final class BriefWatcher {
         watchedDirectory = nil
         lastBriefSignature = nil
         lastRunSignature = nil
+        lastWorkSignature = nil
     }
 
     private func emitIfChanged(force: Bool) {
@@ -59,15 +62,18 @@ final class BriefWatcher {
 
         let briefSignature = FileSignature(url: BriefPaths.briefJSON(in: directory))
         let runSignature = FileSignature(url: BriefPaths.runJSON(in: directory))
+        let workSignature = FileSignature(url: BriefPaths.workJSON(in: directory))
 
         let changed = force
             || briefSignature != lastBriefSignature
             || runSignature != lastRunSignature
+            || workSignature != lastWorkSignature
 
         guard changed else { return }
 
         lastBriefSignature = briefSignature
         lastRunSignature = runSignature
+        lastWorkSignature = workSignature
         onChange()
     }
 }
