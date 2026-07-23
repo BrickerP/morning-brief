@@ -70,6 +70,7 @@
 - Work mutation: Controls pause during the local command; drafts clear only after success. Failures retain typed text, show the diagnostic, and regenerate the projection to reconcile any committed event.
 - Agent update: A quiet unread dot on the work lens and a chronological event with actor/reason/evidence; no pulsing or approval modal
 - Session analysis: Show locating/reading progress without mutating work; show the matched session ID, summary, Todo matches, and every proposed mutation before one explicit confirmation
+- Session apply success: Clear the completed Agent conversation and navigate directly to the refreshed work ledger; do not leave a success dead-end in the Agent lens
 - Session conflict: If any matched Todo changed after analysis, reject the stale proposal set and ask for a fresh analysis rather than partially overwriting current work
 
 ## Content voice

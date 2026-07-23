@@ -15,7 +15,6 @@ final class BriefStore: ObservableObject {
     @Published private(set) var isDoctorRunning = false
     @Published private(set) var isWorkMutating = false
     @Published private(set) var sessionAnalysis: SessionAnalysis?
-    @Published private(set) var sessionApplyResult: SessionApplyResult?
     @Published private(set) var isSessionAnalyzing = false
     @Published private(set) var isSessionApplying = false
 
@@ -358,7 +357,6 @@ final class BriefStore: ObservableObject {
         let value = tail.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty, !isSessionAnalyzing, !isSessionApplying else { return }
         isSessionAnalyzing = true
-        sessionApplyResult = nil
         errorMessage = nil
         notice = "Agent 正在定位并通读 Claude session…"
         Task {
@@ -377,7 +375,7 @@ final class BriefStore: ObservableObject {
         }
     }
 
-    func applySessionAnalysis() {
+    func applySessionAnalysis(onSuccess: @escaping () -> Void) {
         guard let analysis = sessionAnalysis,
               !isSessionAnalyzing,
               !isSessionApplying else {
@@ -392,12 +390,20 @@ final class BriefStore: ObservableObject {
                 let result = try await runner.run(
                     .assistantApply(analysisID: analysis.analysisId)
                 )
-                sessionApplyResult = try decoder.decode(
+                _ = try decoder.decode(
                     SessionApplyResult.self,
                     from: Data(result.stdout.utf8)
                 )
-                refreshWorkProjection()
+                sessionAnalysis = nil
+                refreshAvailableDates()
+                if isViewingToday {
+                    reloadFromDisk()
+                    refreshWorkProjection()
+                } else {
+                    select(date: lastKnownToday)
+                }
                 setTransientNotice("Todo 已更新")
+                onSuccess()
             } catch {
                 errorMessage = error.localizedDescription
                 notice = nil
@@ -409,7 +415,6 @@ final class BriefStore: ObservableObject {
     func clearSessionAnalysis() {
         guard !isSessionAnalyzing, !isSessionApplying else { return }
         sessionAnalysis = nil
-        sessionApplyResult = nil
         errorMessage = nil
     }
 

@@ -5,6 +5,7 @@ struct AgentChatView: View {
 
     @State private var draft = ""
     @State private var showingApplyConfirmation = false
+    @AppStorage("MorningBrief.selectedLens") private var selectedLensRaw = "agent"
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -33,7 +34,10 @@ struct AgentChatView: View {
             titleVisibility: .visible
         ) {
             Button("确认更新") {
-                store.applySessionAnalysis()
+                store.applySessionAnalysis {
+                    draft = ""
+                    selectedLensRaw = "work"
+                }
             }
             Button("取消", role: .cancel) {}
         } message: {
@@ -176,14 +180,6 @@ struct AgentChatView: View {
                 }
             }
 
-            if let applied = store.sessionApplyResult {
-                Label(
-                    "已写入 \(applied.appliedCount) 条更新",
-                    systemImage: "checkmark.circle.fill"
-                )
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.green)
-            }
         }
     }
 
@@ -255,7 +251,6 @@ struct AgentChatView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if let analysis = store.sessionAnalysis,
-                      store.sessionApplyResult == nil,
                       !analysis.proposals.isEmpty {
                 Button("确认 \(analysis.proposals.count) 条更新") {
                     showingApplyConfirmation = true
