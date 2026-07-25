@@ -20,6 +20,7 @@ final class BriefStore: ObservableObject {
     @Published private(set) var isSessionLocating = false
     @Published private(set) var isSessionAnalyzing = false
     @Published private(set) var isSessionApplying = false
+    @Published private(set) var isSessionSummarizing = false
 
     /// Day currently being viewed (`yyyy-MM-dd`). Defaults to today in `BriefPaths.dayTimeZone`.
     @Published private(set) var selectedDate: String = BriefPaths.todayDateString()
@@ -40,6 +41,7 @@ final class BriefStore: ObservableObject {
     private let decoder = JSONDecoder()
     private var noticeClearTask: Task<Void, Never>?
     private var sessionTask: Task<Void, Never>?
+    private var summaryTask: Task<Void, Never>?
     private var pipelineTask: Task<Void, Never>?
     private var workProjectionDatesInFlight = Set<String>()
     private var lastKnownToday = BriefPaths.todayDateString()
@@ -309,10 +311,21 @@ final class BriefStore: ObservableObject {
         )
     }
 
-    func setWorkStatus(itemID: String, status: WorkStatus, version: Int) {
+    func setWorkStatus(
+        itemID: String,
+        status: WorkStatus,
+        version: Int,
+        onSuccess: (() -> Void)? = nil
+    ) {
+        let notice: String = switch status {
+        case .cancelled: "已取消"
+        case .completed: "已完成"
+        default: "状态已更新"
+        }
         runWorkMutation(
             .todoStatus(id: itemID, status: status, expectedVersion: version),
-            successNotice: "状态已更新"
+            successNotice: notice,
+            onSuccess: onSuccess
         )
     }
 
@@ -356,15 +369,32 @@ final class BriefStore: ObservableObject {
         )
     }
 
+    func deleteWork(itemID: String, version: Int, onSuccess: (() -> Void)? = nil) {
+        runWorkMutation(
+            .todoDelete(
+                id: itemID,
+                expectedVersion: version,
+                idempotencyKey: "ui:delete:\(itemID):\(version)"
+            ),
+            successNotice: "已删除",
+            onSuccess: onSuccess
+        )
+    }
+
     func undo(eventID: String) {
-        guard let item = work?.allItems.first(where: {
+        let expectedVersion: Int
+        if let latest = work?.latestReversible, latest.event.eventId == eventID {
+            expectedVersion = latest.expectedVersion
+        } else if let item = work?.allItems.first(where: {
             $0.events.contains { $0.eventId == eventID }
-        }) else {
+        }) {
+            expectedVersion = item.version
+        } else {
             errorMessage = "找不到要撤销的变更"
             return
         }
         runWorkMutation(
-            .todoUndo(eventID: eventID, expectedVersion: item.version),
+            .todoUndo(eventID: eventID, expectedVersion: expectedVersion),
             successNotice: "已撤销"
         )
     }
@@ -420,6 +450,9 @@ final class BriefStore: ObservableObject {
     }
 
     /// Load recent parent sessions for the pick-without-paste list.
+    ///
+    /// Fast path returns cached agent summaries when present. Missing summaries are
+    /// filled once via ``assistant summarize`` (fingerprint cache; no repeat agent calls).
     func loadRecentSessions(limit: Int = 15) {
         Task {
             do {
@@ -428,6 +461,7 @@ final class BriefStore: ObservableObject {
                     RecentSessionList.self,
                     from: Data(result.stdout.utf8)
                 ).sessions
+                ensureRecentSessionSummaries(limit: limit)
             } catch is CancellationError {
                 // ignore
             } catch {
@@ -436,9 +470,37 @@ final class BriefStore: ObservableObject {
         }
     }
 
+    /// Persist agent summaries for listed sessions that lack a fingerprint cache hit.
+    private func ensureRecentSessionSummaries(limit: Int) {
+        let needsWork = recentSessions.contains { session in
+            session.summaryStatus == "pending" || session.summaryStatus == nil
+        }
+        guard needsWork, !isSessionSummarizing else { return }
+        isSessionSummarizing = true
+        summaryTask?.cancel()
+        summaryTask = Task {
+            defer { isSessionSummarizing = false }
+            do {
+                let result = try await runner.run(.assistantSummarize(limit: limit))
+                let payload = try decoder.decode(
+                    RecentSessionSummarizeResult.self,
+                    from: Data(result.stdout.utf8)
+                )
+                recentSessions = payload.sessions
+            } catch is CancellationError {
+                // ignore
+            } catch {
+                // Non-fatal: keep preview/pending rows; next open retries only uncached sessions.
+            }
+        }
+    }
+
     /// Analyze one already-chosen session file, skipping the locate phase.
     func analyzeConfirmedSession(sourceFile: String) {
         guard !isSessionLocating, !isSessionAnalyzing, !isSessionApplying else { return }
+        // Prefer the interactive full analysis over background list summarization.
+        summaryTask?.cancel()
+        isSessionSummarizing = false
         isSessionAnalyzing = true
         errorMessage = nil
         notice = "Agent 正在通读该 Claude session…"
@@ -461,9 +523,10 @@ final class BriefStore: ObservableObject {
         }
     }
 
-    /// Cancel an in-flight locate or analyze.
+    /// Cancel an in-flight locate, analyze, or background session summarize.
     func cancelSession() {
         sessionTask?.cancel()
+        summaryTask?.cancel()
     }
 
     func applySessionAnalysis(onSuccess: @escaping () -> Void) {

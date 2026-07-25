@@ -8,6 +8,7 @@ BRIEFS_DIR = APP_SUPPORT / "briefs"
 LOGS_DIR = APP_SUPPORT / "logs"
 AGENT_WS_DIR = APP_SUPPORT / "agent-workspaces"
 ASSISTANT_DIR = APP_SUPPORT / "assistant"
+SESSION_SUMMARIES_DIR = ASSISTANT_DIR / "session-summaries"
 WORK_LEDGER_DB = APP_SUPPORT / "work-ledger.sqlite3"
 CONFIG_DIR = Path.home() / ".config" / "morning-brief"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
@@ -22,7 +23,7 @@ def brief_dir(date_str: str) -> Path:
 
 
 def ensure_app_dirs() -> None:
-    for p in (BRIEFS_DIR, LOGS_DIR, AGENT_WS_DIR, CONFIG_DIR):
+    for p in (BRIEFS_DIR, LOGS_DIR, AGENT_WS_DIR, ASSISTANT_DIR, SESSION_SUMMARIES_DIR, CONFIG_DIR):
         p.mkdir(parents=True, exist_ok=True)
 
 

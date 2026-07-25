@@ -177,7 +177,7 @@ def test_view_returns_schema_shaped_json_and_publishes_work_file(tmp_path: Path)
 
     view = _json_result(tmp_path, "view")
 
-    assert view["schema_version"] == 1
+    assert view["schema_version"] == 2
     assert set(view) == {
         "schema_version",
         "date",
@@ -186,6 +186,7 @@ def test_view_returns_schema_shaped_json_and_publishes_work_file(tmp_path: Path)
         "items",
         "recent_history",
         "latest_agent_event",
+        "latest_reversible",
     }
     assert view["items"][0]["status"] == "pending"
     published = tmp_path / "briefs" / view["date"] / "work.json"
@@ -346,3 +347,50 @@ def test_concurrent_notes_append_all_events_without_lost_updates(tmp_path: Path)
     assert set(progress) == set(notes)
     assert len(progress) == len(notes)
     assert item["version"] == 1 + len(notes)
+
+
+def test_delete_hides_item_publishes_latest_reversible_and_undo_restores(
+    tmp_path: Path,
+) -> None:
+    created = _add(tmp_path, "误建条目")
+    item_id = created["item"]["id"]
+    deleted = _json_result(
+        tmp_path,
+        "delete",
+        item_id,
+        "--expected-version",
+        str(created["item"]["version"]),
+        "--idempotency-key",
+        "cli-del-1",
+    )
+    assert deleted["event"]["kind"] == "tombstoned"
+    assert "tombstoned" not in deleted["item"]
+
+    retry = _json_result(
+        tmp_path,
+        "delete",
+        item_id,
+        "--expected-version",
+        str(created["item"]["version"]),
+        "--idempotency-key",
+        "cli-del-1",
+    )
+    assert retry["duplicate"] is True
+    assert "tombstoned" not in retry["item"]
+
+    view = _json_result(tmp_path, "view")
+    assert view["items"] == []
+    assert view["latest_reversible"]["event"]["event_id"] == deleted["event"]["event_id"]
+    assert view["latest_reversible"]["item_id"] == item_id
+
+    restored = _json_result(
+        tmp_path,
+        "undo",
+        deleted["event"]["event_id"],
+        "--expected-version",
+        str(view["latest_reversible"]["expected_version"]),
+    )
+    assert restored["item"]["id"] == item_id
+    assert restored["item"]["status"] == "pending"
+    after = _json_result(tmp_path, "view")
+    assert after["items"][0]["id"] == item_id

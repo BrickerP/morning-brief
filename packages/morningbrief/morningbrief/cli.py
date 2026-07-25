@@ -18,8 +18,10 @@ from morningbrief.session_assistant import (
     analyze_claude_session,
     analyze_confirmed_session,
     apply_session_analysis,
+    ensure_session_summaries,
     find_claude_session,
     list_recent_sessions,
+    summarize_session,
 )
 from morningbrief.timeutil import date_str, local_today
 from morningbrief.work_ledger import LedgerError, WorkLedger
@@ -88,6 +90,13 @@ def main(argv: list[str] | None = None) -> None:
     p_todo_note.add_argument("text")
     _add_mutation_arguments(p_todo_note)
 
+    p_todo_delete = todo_sub.add_parser(
+        "delete",
+        help="Hide a pending/in_progress item from projections (append-only tombstone)",
+    )
+    p_todo_delete.add_argument("item_id")
+    _add_mutation_arguments(p_todo_delete)
+
     p_todo_undo = todo_sub.add_parser("undo", help="Revert one mutation event")
     p_todo_undo.add_argument("event_id")
     p_todo_undo.add_argument("--actor", choices=("human", "agent", "system"), default="human")
@@ -132,6 +141,21 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_assistant_sessions.add_argument("--limit", type=int, default=15)
     p_assistant_sessions.add_argument("--project", help="Restrict to one project directory name")
+    p_assistant_summarize = assistant_sub.add_parser(
+        "summarize",
+        help="Persist agent summaries for recent sessions (skips fingerprint cache hits)",
+    )
+    p_assistant_summarize.add_argument("--limit", type=int, default=15)
+    p_assistant_summarize.add_argument("--project", help="Restrict to one project directory name")
+    p_assistant_summarize.add_argument(
+        "--session-file",
+        help="Summarize this exact parent session JSONL instead of the recent list",
+    )
+    p_assistant_summarize.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignore the fingerprint cache and re-run the agent",
+    )
     p_assistant_apply = assistant_sub.add_parser(
         "apply",
         help="Apply the proposals from a prior analysis after confirmation",
@@ -161,6 +185,19 @@ def main(argv: list[str] | None = None) -> None:
                 result = find_claude_session(tail)
             elif args.assistant_cmd == "sessions":
                 result = list_recent_sessions(limit=args.limit, project=args.project)
+            elif args.assistant_cmd == "summarize":
+                if args.session_file:
+                    result = summarize_session(
+                        args.session_file,
+                        cfg=cfg,
+                        force=args.force,
+                    )
+                else:
+                    result = ensure_session_summaries(
+                        limit=args.limit,
+                        project=args.project,
+                        cfg=cfg,
+                    )
             else:
                 result = apply_session_analysis(args.analysis_id, cfg=cfg)
         except (SessionAssistantError, LedgerError, OSError, sqlite3.Error, ValueError) as error:
@@ -210,6 +247,16 @@ def main(argv: list[str] | None = None) -> None:
                 result = ledger.add_progress(
                     args.item_id,
                     args.text,
+                    actor=args.actor,
+                    reason=args.reason,
+                    evidence=args.evidence,
+                    idempotency_key=args.idempotency_key,
+                    expected_version=args.expected_version,
+                    occurred_at=None,
+                )
+            elif args.todo_cmd == "delete":
+                result = ledger.delete(
+                    args.item_id,
                     actor=args.actor,
                     reason=args.reason,
                     evidence=args.evidence,

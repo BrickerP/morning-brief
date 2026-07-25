@@ -14,9 +14,11 @@ from morningbrief.session_assistant import (
     analyze_confirmed_session,
     apply_session_analysis,
     candidate_anchors,
+    ensure_session_summaries,
     find_claude_session,
     list_recent_sessions,
     normalize_analysis,
+    summarize_session,
 )
 from morningbrief.work_ledger import WorkLedger
 
@@ -336,11 +338,94 @@ def test_list_recent_sessions_orders_and_filters(tmp_path: Path) -> None:
     ]
     assert listing["sessions"][0]["preview"] == "帮我排查支付回调"
     assert listing["sessions"][1]["preview"] == "旧会话摘要"
+    assert listing["sessions"][0]["summary"] is None
+    assert listing["sessions"][0]["summary_status"] == "pending"
 
     only_a = list_recent_sessions(project="-proj-a", claude_projects_root=root)
     assert [s["id"] for s in only_a["sessions"]] == [
         "11111111-1111-1111-1111-111111111111"
     ]
+
+
+def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    session_id = "66666666-6666-6666-6666-666666666666"
+    session_file = _write_session(
+        root,
+        "-proj",
+        session_id,
+        [{"type": "user", "message": {"content": "修支付回调并回归"}}],
+    )
+    summaries = tmp_path / "summaries"
+    workspaces = tmp_path / "ws"
+    calls = {"n": 0}
+
+    def fake_agent(args, *, timeout_s, env=None):
+        calls["n"] += 1
+        return ProcResult(
+            0,
+            json.dumps({"summary": f"第{calls['n']}次摘要：支付回调已修。"}, ensure_ascii=False),
+            "",
+        )
+
+    cfg = AppConfig(synth_timeout_s=30)
+    first = summarize_session(
+        session_file,
+        cfg=cfg,
+        claude_projects_root=root,
+        summaries_dir=summaries,
+        agent_workspace_dir=workspaces,
+        agent_runner=fake_agent,
+    )
+    assert first["cached"] is False
+    assert first["summary"] == "第1次摘要：支付回调已修。"
+    assert (summaries / f"{session_id}.json").is_file()
+
+    second = summarize_session(
+        session_file,
+        cfg=cfg,
+        claude_projects_root=root,
+        summaries_dir=summaries,
+        agent_workspace_dir=workspaces,
+        agent_runner=fake_agent,
+    )
+    assert second["cached"] is True
+    assert second["summary"] == "第1次摘要：支付回调已修。"
+    assert calls["n"] == 1
+
+    ensured = ensure_session_summaries(
+        limit=5,
+        cfg=cfg,
+        claude_projects_root=root,
+        summaries_dir=summaries,
+        agent_workspace_dir=workspaces,
+        agent_runner=fake_agent,
+    )
+    assert ensured["summarized"] == 0
+    assert ensured["skipped"] == 1
+    assert ensured["sessions"][0]["summary_status"] == "ready"
+    assert calls["n"] == 1
+
+    # Transcript change invalidates the fingerprint and allows one new summarize.
+    session_file.write_text(
+        json.dumps(
+            {"type": "user", "message": {"content": "追加：生产回归通过"}},
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    third = summarize_session(
+        session_file,
+        cfg=cfg,
+        claude_projects_root=root,
+        summaries_dir=summaries,
+        agent_workspace_dir=workspaces,
+        agent_runner=fake_agent,
+    )
+    assert third["cached"] is False
+    assert third["summary"] == "第2次摘要：支付回调已修。"
+    assert calls["n"] == 2
 
 
 def test_session_preview_prefers_summary_then_user(tmp_path: Path) -> None:

@@ -41,16 +41,35 @@ struct BriefctlRunnerSmoke {
             events: [created, status]
         )
         let document = WorkDocument(
-            schemaVersion: 1,
+            schemaVersion: 2,
             date: "2026-07-23",
             generatedAt: "2026-07-23T11:00:00.000000Z",
             readOnly: false,
             items: [item],
             recentHistory: [],
-            latestAgentEvent: status
+            latestAgentEvent: status,
+            latestReversible: nil
         )
+        // Nil latest_reversible falls back to scanning item events (legacy/local fixtures).
         guard document.latestReversibleEvent?.eventId == status.eventId else {
             fatalError("latest reversible event must follow commit sequence")
+        }
+        let published = WorkDocument(
+            schemaVersion: 2,
+            date: "2026-07-23",
+            generatedAt: "2026-07-23T11:00:00.000000Z",
+            readOnly: false,
+            items: [],
+            recentHistory: [],
+            latestAgentEvent: nil,
+            latestReversible: LatestReversible(
+                event: status,
+                itemId: "clock",
+                expectedVersion: 2
+            )
+        )
+        guard published.latestReversibleEvent?.eventId == status.eventId else {
+            fatalError("published latest_reversible must drive undo after hide")
         }
 
         let followUp = WorkEvent(

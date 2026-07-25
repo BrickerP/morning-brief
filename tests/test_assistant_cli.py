@@ -24,6 +24,7 @@ paths.BRIEFS_DIR = root / "briefs"
 paths.LOGS_DIR = root / "logs"
 paths.AGENT_WS_DIR = root / "agent-workspaces"
 paths.ASSISTANT_DIR = root / "assistant"
+paths.SESSION_SUMMARIES_DIR = root / "assistant" / "session-summaries"
 paths.WORK_LEDGER_DB = root / "work-ledger.sqlite3"
 paths.CONFIG_DIR = root / "config"
 paths.CONFIG_PATH = paths.CONFIG_DIR / "config.toml"
@@ -51,13 +52,16 @@ _orig_find = sa.find_claude_session
 _orig_locate_list = sa.list_recent_sessions
 _orig_analyze_confirmed = sa.analyze_confirmed_session
 _orig_analyze = sa.analyze_claude_session
+_orig_summarize = sa.summarize_session
+_orig_ensure = sa.ensure_session_summaries
 sa.find_claude_session = lambda tail, **kw: _orig_find(
     tail, claude_projects_root=projects_root,
     command_runner=kw.get("command_runner", sa.run_cmd),
 )
 sa.locate_claude_session = sa.find_claude_session
 sa.list_recent_sessions = lambda *a, **kw: _orig_locate_list(
-    *a, **{**kw, "claude_projects_root": projects_root}
+    *a, **{**kw, "claude_projects_root": projects_root,
+           "summaries_dir": paths.SESSION_SUMMARIES_DIR}
 )
 
 def _fake_agent(args, *, timeout_s, env=None):
@@ -71,12 +75,26 @@ sa.analyze_confirmed_session = lambda sf, **kw: _orig_analyze_confirmed(
 sa.analyze_claude_session = lambda tail, **kw: _orig_analyze(
     tail, **{**kw, "claude_projects_root": projects_root, "agent_runner": _fake_agent}
 )
+sa.summarize_session = lambda sf, **kw: _orig_summarize(
+    sf, **{**kw, "claude_projects_root": projects_root,
+           "summaries_dir": paths.SESSION_SUMMARIES_DIR,
+           "agent_workspace_dir": paths.AGENT_WS_DIR,
+           "agent_runner": _fake_agent}
+)
+sa.ensure_session_summaries = lambda *a, **kw: _orig_ensure(
+    *a, **{**kw, "claude_projects_root": projects_root,
+           "summaries_dir": paths.SESSION_SUMMARIES_DIR,
+           "agent_workspace_dir": paths.AGENT_WS_DIR,
+           "agent_runner": _fake_agent}
+)
 
 import morningbrief.cli as cli
 cli.find_claude_session = sa.find_claude_session
 cli.list_recent_sessions = sa.list_recent_sessions
 cli.analyze_confirmed_session = sa.analyze_confirmed_session
 cli.analyze_claude_session = sa.analyze_claude_session
+cli.summarize_session = sa.summarize_session
+cli.ensure_session_summaries = sa.ensure_session_summaries
 
 cli.main(json.loads(sys.argv[1]))
 """
@@ -139,6 +157,53 @@ def test_cli_sessions_lists_recent_parents(tmp_path: Path) -> None:
         "11111111-1111-1111-1111-111111111111",
     ]
     assert payload["sessions"][0]["preview"] == "帮我排查支付回调"
+    assert payload["sessions"][0]["summary"] is None
+    assert payload["sessions"][0]["summary_status"] == "pending"
+
+
+def test_cli_summarize_persists_and_skips_cache_hit(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    _write_session(
+        projects, "-proj", "55555555-5555-5555-5555-555555555555",
+        [{"type": "user", "message": {"content": "总结这条会话"}}],
+    )
+    agent_json = {"summary": "排查支付回调，结论已落地，仍需生产回归。"}
+    first = _run_cli(
+        tmp_path / "as",
+        projects,
+        "assistant",
+        "summarize",
+        "--limit",
+        "3",
+        agent_json=agent_json,
+    )
+    assert first.returncode == 0, first.stderr
+    payload = json.loads(first.stdout)
+    assert payload["summarized"] == 1
+    assert payload["skipped"] == 0
+    assert payload["sessions"][0]["summary"] == agent_json["summary"]
+    assert payload["sessions"][0]["summary_status"] == "ready"
+
+    second = _run_cli(
+        tmp_path / "as",
+        projects,
+        "assistant",
+        "summarize",
+        "--limit",
+        "3",
+        agent_json={"summary": "不应再次调用"},
+    )
+    assert second.returncode == 0, second.stderr
+    again = json.loads(second.stdout)
+    assert again["summarized"] == 0
+    assert again["skipped"] == 1
+    assert again["sessions"][0]["summary"] == agent_json["summary"]
+
+    listing = _run_cli(tmp_path / "as", projects, "assistant", "sessions", "--limit", "3")
+    assert listing.returncode == 0, listing.stderr
+    listed = json.loads(listing.stdout)
+    assert listed["sessions"][0]["summary"] == agent_json["summary"]
+    assert listed["sessions"][0]["summary_status"] == "ready"
 
 
 def test_cli_locate_matches_pasted_ending(tmp_path: Path) -> None:

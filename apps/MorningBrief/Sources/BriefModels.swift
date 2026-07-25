@@ -409,6 +409,18 @@ struct WorkHistoryDay: Codable, Identifiable, Hashable {
     var cancelled: [WorkItem] { items.filter { $0.status == .cancelled } }
 }
 
+struct LatestReversible: Codable, Hashable {
+    let event: WorkEvent
+    let itemId: String
+    let expectedVersion: Int
+
+    enum CodingKeys: String, CodingKey {
+        case event
+        case itemId = "item_id"
+        case expectedVersion = "expected_version"
+    }
+}
+
 struct WorkDocument: Codable {
     let schemaVersion: Int
     let date: String
@@ -417,6 +429,7 @@ struct WorkDocument: Codable {
     let items: [WorkItem]
     let recentHistory: [WorkHistoryDay]
     let latestAgentEvent: WorkEvent?
+    let latestReversible: LatestReversible?
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
@@ -426,6 +439,7 @@ struct WorkDocument: Codable {
         case items
         case recentHistory = "recent_history"
         case latestAgentEvent = "latest_agent_event"
+        case latestReversible = "latest_reversible"
     }
 
     var pending: [WorkItem] { items.filter { $0.status == .pending } }
@@ -433,15 +447,23 @@ struct WorkDocument: Codable {
     var completedToday: [WorkItem] {
         items.filter { $0.status == .completed && $0.terminalDate == date }
     }
+    var cancelledToday: [WorkItem] {
+        items.filter { $0.status == .cancelled && $0.terminalDate == date }
+    }
     var allItems: [WorkItem] {
         items + recentHistory.flatMap(\.items)
     }
 
+    /// Prefer server-published `latest_reversible` (needed after tombstone hide).
     var latestReversibleEvent: WorkEvent? {
+        if let latestReversible { return latestReversible.event }
         let events = allItems.flatMap(\.events)
         let revertedIDs = Set(events.compactMap { $0.kind == "reverted" ? $0.targetEventId : nil })
         return events
-            .filter { !revertedIDs.contains($0.eventId) && $0.kind != "reverted" }
+            .filter {
+                !revertedIDs.contains($0.eventId)
+                    && ["created", "edited", "status_changed", "progress_added", "tombstoned"].contains($0.kind)
+            }
             .max { $0.sequence < $1.sequence }
     }
 }
@@ -583,23 +605,45 @@ struct RecentSession: Codable, Identifiable, Hashable {
     let sourceFile: String
     let modifiedAt: String
     let subagentCount: Int
+    /// Cheap JSONL snippet (first user/summary line). Fallback while agent summary is pending.
     let preview: String
+    /// Persisted agent CLI summary for this session fingerprint; nil until generated.
+    let summary: String?
+    /// `ready` | `pending` | `failed` from briefctl assistant sessions/summarize.
+    let summaryStatus: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, project, preview
+        case id, project, preview, summary
         case sourceFile = "source_file"
         case modifiedAt = "modified_at"
         case subagentCount = "subagent_count"
+        case summaryStatus = "summary_status"
     }
 
     var modifiedAtDate: Date? {
         BriefDateParser.iso8601Fractional.date(from: modifiedAt)
             ?? BriefDateParser.iso8601.date(from: modifiedAt)
     }
+
+    /// Prefer the persisted agent summary; never dump long raw transcript previews as the title.
+    var displayTitle: String {
+        if let summary, !summary.isEmpty { return summary }
+        if summaryStatus == "pending" { return "正在生成摘要…" }
+        if summaryStatus == "failed", !preview.isEmpty { return preview }
+        if !preview.isEmpty { return preview }
+        return id
+    }
 }
 
 struct RecentSessionList: Codable {
     let sessions: [RecentSession]
+}
+
+struct RecentSessionSummarizeResult: Codable {
+    let sessions: [RecentSession]
+    let summarized: Int?
+    let skipped: Int?
+    let failed: Int?
 }
 
 enum BriefPaths {

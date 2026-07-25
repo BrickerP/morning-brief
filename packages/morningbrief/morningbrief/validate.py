@@ -78,9 +78,10 @@ def _validate_work_ledger_fallback(data: dict[str, Any]) -> None:
             "items",
             "recent_history",
             "latest_agent_event",
+            "latest_reversible",
         ],
     )
-    if data["schema_version"] != 1:
+    if data["schema_version"] != 2:
         raise ValidationError("unsupported work ledger schema version")
     if not isinstance(data["items"], list) or not isinstance(data["recent_history"], list):
         raise ValidationError("items and recent_history must be lists")
@@ -117,8 +118,25 @@ def _validate_work_ledger_fallback(data: dict[str, Any]) -> None:
                     "target_event_id",
                 ],
             )
+            if event["kind"] not in (
+                "created",
+                "edited",
+                "status_changed",
+                "progress_added",
+                "tombstoned",
+                "reverted",
+            ):
+                raise ValidationError(f"bad work event kind: {event['kind']}")
             if not isinstance(event["sequence"], int) or event["sequence"] < 1:
                 raise ValidationError("event sequence must be a positive integer")
+
+    latest = data.get("latest_reversible")
+    if latest is not None:
+        if not isinstance(latest, dict):
+            raise ValidationError("latest_reversible must be an object or null")
+        _require(latest, ["event", "item_id", "expected_version"])
+        if latest["item_id"] != latest["event"].get("item_id"):
+            raise ValidationError("latest_reversible.item_id must match event.item_id")
 
 
 def _validate(name: str, data: dict[str, Any], fallback) -> None:

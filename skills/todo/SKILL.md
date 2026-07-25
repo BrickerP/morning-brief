@@ -45,8 +45,15 @@ Use exactly these statuses:
 - `completed`: finished and retained in history
 - `cancelled`: intentionally stopped and retained in history
 
+`todo delete` is not a status. It appends a `tombstoned` event that hides the
+item from published projections (`items` / recent history) while keeping the
+event rail append-only and undoable. Only `pending` and `in_progress` items may
+be deleted. Prefer `cancelled` when the stop itself is a meaningful outcome the
+user should still see in history.
+
 Do not mark an item completed merely because one sub-step finished. Add a note
 for partial results and leave it in progress when follow-up remains.
+Never propose or apply tombstone/delete from the Claude session assistant path.
 
 ## Commands
 
@@ -59,15 +66,25 @@ briefctl todo edit ITEM_ID [--title TEXT] [--detail TEXT] [common mutation flags
 briefctl todo status ITEM_ID pending|in_progress|completed|cancelled
   [common mutation flags]
 briefctl todo note ITEM_ID TEXT [common mutation flags]
+briefctl todo delete ITEM_ID [common mutation flags]
 briefctl todo undo EVENT_ID [--actor human|agent|system] [--reason TEXT]
   [--idempotency-key KEY] [--expected-version VERSION]
 briefctl todo history [--date YYYY-MM-DD] [--days 7]
 briefctl assistant sessions [--limit 15] [--project NAME]
+briefctl assistant summarize [--limit 15] [--project NAME]
+briefctl assistant summarize --session-file PARENT_SESSION_JSONL [--force]
 briefctl assistant locate --input SESSION_ENDING_FILE
 briefctl assistant analyze --input SESSION_ENDING_FILE
 briefctl assistant analyze --session-file PARENT_SESSION_JSONL
 briefctl assistant apply ANALYSIS_ID
 ```
+
+`assistant sessions` returns cheap `preview` plus any persisted agent `summary`
+(`summary_status`: `ready` | `pending` | `failed`). `assistant summarize` calls
+the Agent CLI at most once per session fingerprint and writes
+`~/Library/Application Support/MorningBrief/assistant/session-summaries/<id>.json`.
+Do not re-run summarize for cache hits unless the user explicitly asks with `--force`.
+
 
 Common mutation flags are `--actor`, `--reason`, repeatable `--evidence`,
 `--idempotency-key`, and `--expected-version`.

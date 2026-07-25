@@ -52,7 +52,7 @@ struct AgentChatView: View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
             Label("Claude Session → Todo", systemImage: "bubble.left.and.text.bubble.right")
                 .font(.headline)
-            Text("从下方最近会话里直接选一条，或粘贴 terminal 中 Claude session 的结尾。Agent 会通读主会话和子 Agent，再匹配今天的 Todo。分析阶段不会修改台账。")
+            Text("从下方选一条最近会话，或粘贴 Claude session 结尾。列表显示缓存的 Agent 摘要；点选后才会通读并匹配 Todo，分析阶段不改台账。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -63,8 +63,18 @@ struct AgentChatView: View {
     private var recentSessionsList: some View {
         if !store.recentSessions.isEmpty {
             VStack(alignment: .leading, spacing: DS.Space.xs) {
-                sectionTitle("最近会话", count: store.recentSessions.count)
-                ForEach(store.recentSessions.prefix(6)) { session in
+                HStack(spacing: DS.Space.xs) {
+                    sectionTitle("最近会话", count: store.recentSessions.count)
+                    Spacer(minLength: 0)
+                    if store.isSessionSummarizing {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text("生成摘要")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                ForEach(store.recentSessions) { session in
                     Button {
                         store.analyzeConfirmedSession(sourceFile: session.sourceFile)
                     } label: {
@@ -73,7 +83,7 @@ struct AgentChatView: View {
                     .buttonStyle(.plain)
                     .disabled(store.isSessionAnalyzing || store.isSessionLocating)
                 }
-                Text("点击任一会话即可直接通读分析，免粘贴。")
+                Text("点选即通读分析。摘要按指纹缓存，不会反复调用 Agent CLI。")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -82,15 +92,15 @@ struct AgentChatView: View {
 
     private func recentSessionRow(_ session: RecentSession) -> some View {
         HStack(alignment: .top, spacing: DS.Space.sm) {
-            Image(systemName: "clock.arrow.circlepath")
+            Image(systemName: session.summaryStatus == "ready" ? "text.quote" : "clock.arrow.circlepath")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.preview.isEmpty ? session.id : session.preview)
+                Text(session.displayTitle)
                     .font(.callout)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
+                    .foregroundStyle(session.summaryStatus == "pending" ? .secondary : .primary)
+                    .lineLimit(3)
                     .multilineTextAlignment(.leading)
                 HStack(spacing: 6) {
                     Text(sessionProject(session.project))

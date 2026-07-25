@@ -9,10 +9,11 @@
     "read_only",
     "items",
     "recent_history",
-    "latest_agent_event"
+    "latest_agent_event",
+    "latest_reversible"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "date": {"type": "string", "format": "date"},
     "generated_at": {"type": "string"},
     "read_only": {"type": "boolean"},
@@ -31,6 +32,9 @@
     },
     "latest_agent_event": {
       "anyOf": [{"$ref": "#/$defs/event"}, {"type": "null"}]
+    },
+    "latest_reversible": {
+      "anyOf": [{"$ref": "#/$defs/latestReversible"}, {"type": "null"}]
     }
   },
   "$defs": {
@@ -54,7 +58,14 @@
         "event_id": {"type": "string"},
         "item_id": {"type": "string"},
         "kind": {
-          "enum": ["created", "edited", "status_changed", "progress_added", "reverted"]
+          "enum": [
+            "created",
+            "edited",
+            "status_changed",
+            "progress_added",
+            "tombstoned",
+            "reverted"
+          ]
         },
         "actor": {"enum": ["human", "agent", "system"]},
         "occurred_at": {"type": "string"},
@@ -63,6 +74,16 @@
         "evidence": {"type": "array", "items": {"type": "string"}},
         "idempotency_key": {"type": ["string", "null"]},
         "target_event_id": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "latestReversible": {
+      "type": "object",
+      "required": ["event", "item_id", "expected_version"],
+      "properties": {
+        "event": {"$ref": "#/$defs/event"},
+        "item_id": {"type": "string"},
+        "expected_version": {"type": "integer", "minimum": 1}
       },
       "additionalProperties": false
     },

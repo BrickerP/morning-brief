@@ -12,8 +12,8 @@
 - Avoid: Purple gradients, neon accents, “AI slop” aesthetics, mascot icons, dense widget grids, shimmer loaders, chat bubbles, Kanban squeezed into a menu
 
 ## Product goals
-- Goals: Surface today’s brief at a glance; capture and maintain today's work throughout the day; expose pending/in-progress/completed/cancelled state; retain progress and recent completion history; recover a Claude session from pasted ending text; let the local agent summarize and propose inspectable Todo updates before confirmed, reversible writes
-- Non-goals: Full markdown editor, project-management hierarchy, calendar/timeboxing, generic connector marketplace, general-purpose multi-session chat, Dock presence, multi-window browsing, notification spam
+- Goals: Surface today’s brief at a glance; capture and maintain today's work throughout the day; expose pending/in-progress/completed/cancelled state; allow explicit **删除** (append-only tombstone hide) distinct from **取消**; retain progress and recent completion history; recover a Claude session from pasted ending text; let the local agent summarize and propose inspectable Todo updates before confirmed, reversible writes
+- Non-goals: Full markdown editor, project-management hierarchy, calendar/timeboxing, generic connector marketplace, general-purpose multi-session chat, Dock presence, multi-window browsing, notification spam, hard SQL purge of ledger events
 - Success signals: User captures meeting work before context is lost; one opening answers what is pending/active/completed; agent changes remain explainable and undoable; the brief stays readable without competing with the ledger
 
 ## Personas and jobs
@@ -78,8 +78,8 @@
 
 ## Content voice
 - Tone: Brief, neutral, and operational; Chinese work-ledger language coexists with the Morning Brief brand
-- Terminology: `待处理`, `进行中`, `已完成`, `取消`, `进展`, `证据`, and `撤销`; brief terminology remains unchanged
-- Microcopy rules: Non-errors use secondary/blue styling; errors use red; avoid exclamation-heavy copy
+- Terminology: `待处理`, `进行中`, `已完成`, `取消` (retained terminal stop), `删除` (tombstone hide from views, undoable), `进展`, `证据`, and `撤销`; brief terminology remains unchanged
+- Microcopy rules: Non-errors use secondary/blue styling; errors use red; avoid exclamation-heavy copy; cancel confirms are not error-styled; delete confirm may use destructive role inside the sheet only
 
 ## Implementation constraints
 - Framework/styling system: SwiftUI on macOS 14+, AppKit only for process/terminate/open; Python `briefctl` owns session recovery, structured Agent analysis, and confirmed work mutations

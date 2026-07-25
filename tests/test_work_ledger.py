@@ -232,7 +232,10 @@ def test_work_mutations_do_not_touch_brief_json(tmp_path: Path) -> None:
     ledger.add("隔离任务", item_id="isolated", occurred_at=at(23, 8))
 
     assert brief_path.read_bytes() == original
-    assert (day_dir / "work.json").exists()
+    # Mutations publish today's projection, not the synthetic occurred_at day.
+    published = list(ledger.briefs_dir.glob("*/work.json"))
+    assert len(published) == 1
+    assert published[0].name == "work.json"
 
 
 def test_replay_uses_commit_sequence_when_timestamps_move_backwards(tmp_path: Path) -> None:
@@ -365,3 +368,106 @@ def test_fallback_validator_requires_event_sequence(tmp_path: Path) -> None:
             raise AssertionError("fallback validator should require event sequence")
     finally:
         validate_module.jsonschema = original_jsonschema
+
+
+def test_delete_tombstones_hides_from_projection_and_supports_undo(tmp_path: Path) -> None:
+    ledger = make_ledger(tmp_path)
+    ledger.add("误记任务", item_id="gone", occurred_at=at(23, 7))
+    deleted = ledger.delete(
+        "gone",
+        actor="human",
+        reason="不需要",
+        evidence=[],
+        idempotency_key="del-gone",
+        expected_version=1,
+        occurred_at=at(23, 8),
+    )
+    assert deleted["event"]["kind"] == "tombstoned"
+    assert "tombstoned" not in deleted["item"]  # public mutation payload strips internal flag
+
+    snapshot = ledger.view("2026-07-23", publish=False)
+    assert snapshot["schema_version"] == 2
+    assert snapshot["items"] == []
+    assert snapshot["latest_reversible"]["event"]["event_id"] == deleted["event"]["event_id"]
+    assert snapshot["latest_reversible"]["item_id"] == "gone"
+    assert snapshot["latest_reversible"]["expected_version"] == 2
+
+    restored = ledger.undo(
+        event_id=deleted["event"]["event_id"],
+        actor="human",
+        reason="误删恢复",
+        expected_version=2,
+        occurred_at=at(23, 9),
+    )
+    assert restored["item"]["status"] == "pending"
+    assert "tombstoned" not in restored["item"]
+    after = ledger.view("2026-07-23", publish=False)
+    assert after["items"][0]["id"] == "gone"
+    assert after["items"][0]["status"] == "pending"
+
+
+def test_delete_rejects_terminal_status_and_non_revert_after_tombstone(
+    tmp_path: Path,
+) -> None:
+    ledger = make_ledger(tmp_path)
+    ledger.add("完成后再删", item_id="done", occurred_at=at(23, 7))
+    ledger.set_status(
+        "done",
+        "completed",
+        actor="human",
+        reason=None,
+        evidence=[],
+        idempotency_key=None,
+        expected_version=1,
+        occurred_at=at(23, 8),
+    )
+    try:
+        ledger.delete(
+            "done",
+            actor="human",
+            reason=None,
+            evidence=[],
+            idempotency_key=None,
+            expected_version=2,
+        )
+    except work_ledger_module.LedgerError as error:
+        assert "pending or in_progress" in str(error)
+    else:
+        raise AssertionError("completed items must not be deleteable")
+
+    ledger.add("进行中可删", item_id="active", occurred_at=at(23, 9))
+    ledger.delete(
+        "active",
+        actor="human",
+        reason=None,
+        evidence=[],
+        idempotency_key="del-active",
+        expected_version=1,
+        occurred_at=at(23, 10),
+    )
+    duplicate = ledger.delete(
+        "active",
+        actor="human",
+        reason=None,
+        evidence=[],
+        idempotency_key="del-active",
+        expected_version=1,
+        occurred_at=at(23, 10),
+    )
+    assert duplicate["duplicate"] is True
+    assert "tombstoned" not in duplicate["item"]
+    try:
+        ledger.add_progress(
+            "active",
+            "不应写入",
+            actor="human",
+            reason=None,
+            evidence=[],
+            idempotency_key=None,
+            expected_version=2,
+            occurred_at=at(23, 11),
+        )
+    except ConflictError as error:
+        assert "tombstoned" in str(error)
+    else:
+        raise AssertionError("non-revert mutation on tombstoned item must conflict")

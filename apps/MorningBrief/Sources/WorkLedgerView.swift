@@ -17,6 +17,9 @@ struct WorkLedgerView: View {
     @State private var archivedItem: WorkItem?
     @State private var showingHistory = false
     @State private var completedExpanded = false
+    @State private var cancelledExpanded = false
+    @State private var pendingCancelItem: WorkItem?
+    @State private var pendingDeleteItem: WorkItem?
     @FocusState private var captureFocused: Bool
 
     private var selectedItem: WorkItem? {
@@ -60,6 +63,7 @@ struct WorkLedgerView: View {
                     workSection("进行中", items: store.work?.inProgress ?? [])
                     workSection("待处理", items: store.work?.pending ?? [])
                     completedSection
+                    cancelledSection
                     historyLink
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -70,6 +74,44 @@ struct WorkLedgerView: View {
             workFooter
         }
         .background(captureShortcut)
+        .confirmationDialog(
+            "取消这个任务？",
+            isPresented: isCancelConfirmPresented,
+            titleVisibility: .visible
+        ) {
+            if let item = pendingCancelItem {
+                Button("取消任务") {
+                    applyStatus(item, .cancelled)
+                    pendingCancelItem = nil
+                }
+                Button("返回", role: .cancel) {
+                    pendingCancelItem = nil
+                }
+            }
+        } message: {
+            if let item = pendingCancelItem {
+                Text("「\(item.title)」会移出进行中/待处理，记录保留在最近 7 天。")
+            }
+        }
+        .confirmationDialog(
+            "删除这个任务？",
+            isPresented: isDeleteConfirmPresented,
+            titleVisibility: .visible
+        ) {
+            if let item = pendingDeleteItem {
+                Button("删除", role: .destructive) {
+                    applyDelete(item)
+                    pendingDeleteItem = nil
+                }
+                Button("返回", role: .cancel) {
+                    pendingDeleteItem = nil
+                }
+            }
+        } message: {
+            if let item = pendingDeleteItem {
+                Text("「\(item.title)」会从台账视图中移除；事件仍保留且可撤销，不会出现在最近记录里。")
+            }
+        }
         .onAppear {
             if store.isViewingToday, !(store.work?.readOnly ?? false) {
                 captureFocused = true
@@ -104,6 +146,12 @@ struct WorkLedgerView: View {
                 ForEach(items) { item in
                     WorkItemRow(item: item) {
                         selectedItemID = item.id
+                    } onCancel: {
+                        pendingCancelItem = item
+                    } onComplete: {
+                        applyStatus(item, .completed)
+                    } onDelete: {
+                        pendingDeleteItem = item
                     }
                 }
             }
@@ -138,6 +186,50 @@ struct WorkLedgerView: View {
                 }
             }
         }
+    }
+
+    private var cancelledSection: some View {
+        let cancelled = store.work?.cancelledToday ?? []
+        return VStack(alignment: .leading, spacing: DS.Space.xs) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    cancelledExpanded.toggle()
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .rotationEffect(.degrees(cancelledExpanded ? 90 : 0))
+                    sectionLabel("今日取消", count: cancelled.count)
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(cancelledExpanded ? "收起今日取消" : "展开今日取消")
+
+            if cancelledExpanded {
+                ForEach(cancelled) { item in
+                    WorkItemRow(item: item) {
+                        selectedItemID = item.id
+                    }
+                }
+            }
+        }
+    }
+
+    private var isCancelConfirmPresented: Binding<Bool> {
+        Binding(
+            get: { pendingCancelItem != nil },
+            set: { if !$0 { pendingCancelItem = nil } }
+        )
+    }
+
+    private var isDeleteConfirmPresented: Binding<Bool> {
+        Binding(
+            get: { pendingDeleteItem != nil },
+            set: { if !$0 { pendingDeleteItem = nil } }
+        )
     }
 
     private var historyLink: some View {
@@ -258,14 +350,11 @@ struct WorkLedgerView: View {
                         .disabled(store.isWorkMutating)
                         .accessibilityHint("修改任务标题和说明")
 
+                        // Non-destructive transitions only; cancel/delete use footer confirms.
                         Menu {
-                            ForEach(WorkStatus.allCases) { status in
+                            ForEach([WorkStatus.pending, .inProgress], id: \.self) { status in
                                 Button {
-                                    store.setWorkStatus(
-                                        itemID: item.id,
-                                        status: status,
-                                        version: item.version
-                                    )
+                                    applyStatus(item, status)
                                 } label: {
                                     Label(status.title, systemImage: status.iconName)
                                 }
@@ -276,7 +365,7 @@ struct WorkLedgerView: View {
                         .menuStyle(.borderlessButton)
                         .fixedSize()
                         .disabled(store.isWorkMutating)
-                        .accessibilityLabel("当前状态 \(item.status.title)，选择新状态")
+                        .accessibilityLabel("当前状态 \(item.status.title)，选择进行中或待处理")
                     }
                 }
             }
@@ -322,12 +411,35 @@ struct WorkLedgerView: View {
                         }
                     }
 
-                if let event = item.events.last(where: {
-                    $0.kind != "reverted"
-                        && !item.isEventReverted($0)
-                }) {
-                    HStack {
-                        Spacer()
+                HStack(spacing: DS.Space.sm) {
+                    if item.status == .pending || item.status == .inProgress {
+                        Button("完成") {
+                            applyStatus(item, .completed)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(store.isWorkMutating)
+
+                        Button("取消任务") {
+                            pendingCancelItem = item
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(store.isWorkMutating)
+                        .accessibilityHint("将任务标为已取消并从今日列表移除")
+
+                        Button("删除…") {
+                            pendingDeleteItem = item
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(store.isWorkMutating)
+                        .accessibilityHint("从台账视图移除，可撤销")
+                    }
+
+                    Spacer()
+
+                    if let event = item.events.last(where: {
+                        $0.kind != "reverted"
+                            && !item.isEventReverted($0)
+                    }) {
                         Button("撤销此变更") {
                             store.undo(eventID: event.eventId)
                         }
@@ -339,6 +451,44 @@ struct WorkLedgerView: View {
                 Label("历史记录只读", systemImage: "lock")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+        .confirmationDialog(
+            "取消这个任务？",
+            isPresented: isCancelConfirmPresented,
+            titleVisibility: .visible
+        ) {
+            if let item = pendingCancelItem {
+                Button("取消任务") {
+                    applyStatus(item, .cancelled)
+                    pendingCancelItem = nil
+                }
+                Button("返回", role: .cancel) {
+                    pendingCancelItem = nil
+                }
+            }
+        } message: {
+            if let item = pendingCancelItem {
+                Text("「\(item.title)」会移出进行中/待处理，记录保留在最近 7 天。")
+            }
+        }
+        .confirmationDialog(
+            "删除这个任务？",
+            isPresented: isDeleteConfirmPresented,
+            titleVisibility: .visible
+        ) {
+            if let item = pendingDeleteItem {
+                Button("删除", role: .destructive) {
+                    applyDelete(item)
+                    pendingDeleteItem = nil
+                }
+                Button("返回", role: .cancel) {
+                    pendingDeleteItem = nil
+                }
+            }
+        } message: {
+            if let item = pendingDeleteItem {
+                Text("「\(item.title)」会从台账视图中移除；事件仍保留且可撤销，不会出现在最近记录里。")
             }
         }
         .background(
@@ -356,6 +506,22 @@ struct WorkLedgerView: View {
                 }
             }
         )
+    }
+
+    private func applyStatus(_ item: WorkItem, _ status: WorkStatus) {
+        store.setWorkStatus(itemID: item.id, status: status, version: item.version) {
+            if status == .cancelled || status == .completed {
+                selectedItemID = nil
+                archivedItem = nil
+            }
+        }
+    }
+
+    private func applyDelete(_ item: WorkItem) {
+        store.deleteWork(itemID: item.id, version: item.version) {
+            selectedItemID = nil
+            archivedItem = nil
+        }
     }
 
     private func editForm(_ item: WorkItem) -> some View {
@@ -529,6 +695,9 @@ struct WorkLedgerView: View {
 private struct WorkItemRow: View {
     let item: WorkItem
     let action: () -> Void
+    var onCancel: (() -> Void)? = nil
+    var onComplete: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
 
     var body: some View {
         Button(action: action) {
@@ -564,6 +733,19 @@ private struct WorkItemRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            if item.status == .pending || item.status == .inProgress {
+                if let onComplete {
+                    Button("标记完成") { onComplete() }
+                }
+                if let onCancel {
+                    Button("取消任务") { onCancel() }
+                }
+                if let onDelete {
+                    Button("删除…", role: .destructive) { onDelete() }
+                }
+            }
+        }
         .accessibilityLabel("\(item.status.title)，\(item.title)")
     }
 }

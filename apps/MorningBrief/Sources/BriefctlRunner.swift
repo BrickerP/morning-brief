@@ -16,11 +16,13 @@ enum BriefctlCommand {
     )
     case todoStatus(id: String, status: WorkStatus, expectedVersion: Int)
     case todoNote(id: String, text: String, expectedVersion: Int, idempotencyKey: String)
+    case todoDelete(id: String, expectedVersion: Int, idempotencyKey: String)
     case todoUndo(eventID: String, expectedVersion: Int)
     case assistantAnalyze(tail: String)
     case assistantAnalyzeFile(sessionFile: String)
     case assistantLocate(tail: String)
     case assistantSessions(limit: Int)
+    case assistantSummarize(limit: Int)
     case assistantApply(analysisID: String)
 
     var arguments: [String] {
@@ -63,6 +65,13 @@ enum BriefctlCommand {
                 "--expected-version", String(expectedVersion),
                 "--idempotency-key", idempotencyKey
             ]
+        case let .todoDelete(id, expectedVersion, idempotencyKey):
+            [
+                "todo", "delete", id,
+                "--actor", "human",
+                "--expected-version", String(expectedVersion),
+                "--idempotency-key", idempotencyKey
+            ]
         case let .todoUndo(eventID, expectedVersion):
             [
                 "todo", "undo", eventID,
@@ -79,6 +88,8 @@ enum BriefctlCommand {
             ["assistant", "locate", "--input", "-"]
         case let .assistantSessions(limit):
             ["assistant", "sessions", "--limit", String(limit)]
+        case let .assistantSummarize(limit):
+            ["assistant", "summarize", "--limit", String(limit)]
         case let .assistantApply(analysisID):
             ["assistant", "apply", analysisID]
         }

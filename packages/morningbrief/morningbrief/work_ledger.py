@@ -19,7 +19,7 @@ WorkStatus = Literal["pending", "in_progress", "completed", "cancelled"]
 
 ACTORS = {"human", "agent", "system"}
 STATUSES = {"pending", "in_progress", "completed", "cancelled"}
-MUTATION_KINDS = {"created", "edited", "status_changed", "progress_added"}
+MUTATION_KINDS = {"created", "edited", "status_changed", "progress_added", "tombstoned"}
 
 
 class LedgerError(ValueError):
@@ -178,6 +178,7 @@ class WorkLedger:
                     "created_at": event["occurred_at"],
                     "updated_at": event["occurred_at"],
                     "version": 1,
+                    "tombstoned": False,
                     "events": [event],
                 }
                 continue
@@ -196,6 +197,8 @@ class WorkLedger:
                     item["detail"] = payload["detail"]
             elif event["kind"] == "status_changed":
                 item["status"] = payload["status"]
+            elif event["kind"] == "tombstoned":
+                item["tombstoned"] = True
         return items
 
     def _day_end(self, day: str) -> datetime:
@@ -223,9 +226,32 @@ class WorkLedger:
         return terminal_day
 
     def _public_item(self, item: dict[str, Any]) -> dict[str, Any]:
-        public_item = dict(item)
+        public_item = {key: value for key, value in item.items() if key != "tombstoned"}
         public_item["terminal_date"] = self._terminal_day(item)
         return public_item
+
+    def _latest_reversible(
+        self, items: dict[str, dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        reverted = {
+            event["target_event_id"]
+            for item in items.values()
+            for event in item["events"]
+            if event["kind"] == "reverted" and event["target_event_id"]
+        }
+        candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for item in items.values():
+            for event in item["events"]:
+                if event["kind"] in MUTATION_KINDS and event["event_id"] not in reverted:
+                    candidates.append((event, item))
+        if not candidates:
+            return None
+        event, item = max(candidates, key=lambda pair: pair[0]["sequence"])
+        return {
+            "event": event,
+            "item_id": item["id"],
+            "expected_version": item["version"],
+        }
 
     def _snapshot(self, conn: sqlite3.Connection, day: str, days: int = 7) -> dict[str, Any]:
         end = self._day_end(day)
@@ -235,7 +261,11 @@ class WorkLedger:
         history: dict[str, list[dict[str, Any]]] = {}
         selected_date = date.fromisoformat(day)
 
+        latest_reversible = self._latest_reversible(items)
+
         for item in items.values():
+            if item.get("tombstoned"):
+                continue
             public_item = self._public_item(item)
             if (
                 item["status"] in {"pending", "in_progress"}
@@ -254,6 +284,8 @@ class WorkLedger:
             day_items = self._project_items(day_events)
             terminal_items: list[dict[str, Any]] = []
             for item in day_items.values():
+                if item.get("tombstoned"):
+                    continue
                 terminal_day = self._terminal_day(item)
                 if (
                     item["status"] in {"completed", "cancelled"}
@@ -282,13 +314,14 @@ class WorkLedger:
             None,
         )
         snapshot = {
-            "schema_version": 1,
+            "schema_version": 2,
             "date": day,
             "generated_at": _iso(_utc_now()),
             "read_only": day != datetime.now(self.timezone).date().isoformat(),
             "items": selected,
             "recent_history": groups,
             "latest_agent_event": latest_agent_event,
+            "latest_reversible": latest_reversible,
         }
         validate_work_ledger_snapshot(snapshot)
         return snapshot
@@ -354,7 +387,10 @@ class WorkLedger:
                                 f"{idempotency_key}"
                             )
                         events = self._events(conn)
-                        item = self._project_items(events).get(event["item_id"])
+                        projected = self._project_items(events).get(event["item_id"])
+                        item = (
+                            self._public_item(projected) if projected is not None else None
+                        )
                         duplicate = True
 
                 if not duplicate:
@@ -376,6 +412,14 @@ class WorkLedger:
                         raise ConflictError(
                             f"version conflict for {actual_item_id}: expected {expected_version}, "
                             f"current {current_version}"
+                        )
+                    if (
+                        current is not None
+                        and current.get("tombstoned")
+                        and kind != "reverted"
+                    ):
+                        raise ConflictError(
+                            f"work item is tombstoned and only undo is allowed: {actual_item_id}"
                         )
                     if kind == "reverted":
                         targets = {
@@ -420,7 +464,8 @@ class WorkLedger:
                     conn.commit()
                     events = self._events(conn)
                     event = next(entry for entry in events if entry["event_id"] == event_id)
-                    item = self._project_items(events).get(actual_item_id)
+                    projected = self._project_items(events).get(actual_item_id)
+                    item = self._public_item(projected) if projected is not None else None
             today = datetime.now(self.timezone).date().isoformat()
             with self._connect() as conn:
                 snapshot = self._snapshot(conn, today)
@@ -498,6 +543,29 @@ class WorkLedger:
             raise LedgerError("progress text must not be empty")
         return self._append(
             item_id=item_id, kind="progress_added", payload={"text": clean_text}, **kwargs
+        )
+
+    def delete(
+        self,
+        item_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Append a tombstoned event; item stays in projector, filtered from publish."""
+        # Eligibility checked against current projection inside a short read.
+        with self._connect() as conn:
+            current = self._project_items(self._events(conn)).get(item_id)
+        if current is None:
+            raise NotFoundError(f"work item not found: {item_id}")
+        if current.get("tombstoned"):
+            # Let _append handle idempotent duplicate via idempotency_key; otherwise conflict.
+            if not kwargs.get("idempotency_key"):
+                raise ConflictError(f"work item already tombstoned: {item_id}")
+        elif current["status"] not in {"pending", "in_progress"}:
+            raise LedgerError(
+                "delete is only allowed for pending or in_progress items"
+            )
+        return self._append(
+            item_id=item_id, kind="tombstoned", payload={}, **kwargs
         )
 
     def undo(

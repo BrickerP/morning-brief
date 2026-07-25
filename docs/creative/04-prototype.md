@@ -65,7 +65,9 @@ Interaction rules:
 - Enter saves rough text immediately as `待处理`; no required form.
 - `进行中` appears before `待处理`.
 - `今日完成` is collapsed by default.
-- `取消` is not mixed into the active list; it remains available in history.
+- `取消` is not mixed into the active list; it remains available under 今日取消 / history.
+- `删除` (tombstone) removes the item from published projections; it is undoable via
+  footer 「撤销上次更新」 and must not be confused with `取消`.
 - The footer shows the latest agent activity and an undo action when available.
 - A small blue dot appears on the `工作台账` segment when the agent changed
   something since the user last viewed it. The menu-bar icon itself remains quiet.
