@@ -11,7 +11,9 @@ from morningbrief.session_assistant import (
     SUMMARY_RECIPE_VERSION,
     SessionAssistantError,
     _extract_tail_turns,
+    _project_label,
     _session_preview,
+    _summary_prompt,
     _validate_session_path,
     analyze_confirmed_session,
     apply_session_analysis,
@@ -368,7 +370,13 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
         calls["n"] += 1
         return ProcResult(
             0,
-            json.dumps({"summary": f"第{calls['n']}次摘要：支付回调已修。"}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "summary": f"第{calls['n']}次摘要：支付回调已修。",
+                    "detail": f"第{calls['n']}次详情：用户要修支付回调；本地已改完，待生产回归。",
+                },
+                ensure_ascii=False,
+            ),
             "",
         )
 
@@ -384,6 +392,7 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
     assert first["cached"] is False
     assert first["recipe_version"] == SUMMARY_RECIPE_VERSION
     assert first["summary"] == "第1次摘要：支付回调已修。"
+    assert first["detail"] == "第1次详情：用户要修支付回调；本地已改完，待生产回归。"
     cache_name = f"claude_{session_id}.json"
     cached_doc = json.loads((summaries / cache_name).read_text(encoding="utf-8"))
     assert cached_doc["recipe_version"] == SUMMARY_RECIPE_VERSION
@@ -415,6 +424,7 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
     )
     assert second["cached"] is True
     assert second["summary"] == "第2次摘要：支付回调已修。"
+    assert second["detail"] == "第2次详情：用户要修支付回调；本地已改完，待生产回归。"
     assert calls["n"] == 2
 
     ensured = ensure_session_summaries(
@@ -482,7 +492,28 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
     )
     assert third["cached"] is False
     assert third["summary"] == "第3次摘要：支付回调已修。"
+    assert third["detail"] == "第3次详情：用户要修支付回调；本地已改完，待生产回归。"
     assert calls["n"] == 3
+
+
+def test_project_label_prefers_repo_tail() -> None:
+    assert _project_label("-Users-yupeng-Downloads-morning-brief") == "morning-brief"
+    assert _project_label("2026-07-27", source="codex") == ""
+    assert _project_label("2026-07-27") == ""
+
+
+def test_summary_prompt_requires_distinctive_proper_noun() -> None:
+    prompt = _summary_prompt(
+        turn_count=3,
+        omitted_earlier=True,
+        project_hint="morning-brief",
+    )
+    assert "专名主题" in prompt
+    assert "继续排查" in prompt
+    assert "morning-brief" in prompt
+    assert '"detail"' in prompt
+    assert "用户目标" in prompt
+    assert SUMMARY_RECIPE_VERSION.startswith("tail-")
 
 
 def test_session_preview_prefers_latest_user_not_opener(tmp_path: Path) -> None:

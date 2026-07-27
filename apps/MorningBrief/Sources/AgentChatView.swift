@@ -79,9 +79,16 @@ struct AgentChatView: View {
                 if store.isSessionSummarizing {
                     ProgressView()
                         .controlSize(.mini)
-                    Text("生成摘要")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    if let progress = store.sessionSummaryProgress {
+                        Text("生成摘要 \(progress.completed)/\(progress.total)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                    } else {
+                        Text("生成摘要")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
             Picker("来源", selection: $sessionSourceTab) {
@@ -124,10 +131,17 @@ struct AgentChatView: View {
                         .padding(.top, 2)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(session.displayTitle)
-                            .font(.callout)
+                            .font(.callout.weight(.medium))
                             .foregroundStyle(session.summaryStatus == "pending" ? .secondary : .primary)
                             .lineLimit(expanded ? nil : 2)
                             .multilineTextAlignment(.leading)
+                        if sessionShowsAskCue(session) {
+                            Text(session.preview)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .multilineTextAlignment(.leading)
+                        }
                         HStack(spacing: 6) {
                             Text(sessionProject(session.project))
                                 .lineLimit(1)
@@ -152,22 +166,7 @@ struct AgentChatView: View {
             .buttonStyle(.plain)
 
             if expanded {
-                if session.supportsAnalyze {
-                    Button {
-                        store.analyzeConfirmedSession(sourceFile: session.sourceFile)
-                    } label: {
-                        Text("通读分析")
-                            .font(.caption.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(store.isSessionAnalyzing || store.isSessionLocating)
-                } else {
-                    Text("\(session.sourceTitle) 会话目前只支持摘要预览")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
+                sessionExpandBody(session)
             }
         }
         .padding(DS.Space.sm)
@@ -176,10 +175,91 @@ struct AgentChatView: View {
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
     }
 
-    /// Turn a Claude project dir name ("-Users-me-work") into a readable tail.
+    /// Latest user-ask cue under a ready summary (helps skim when blurbs rhyme).
+    private func sessionShowsAskCue(_ session: RecentSession) -> Bool {
+        guard session.summaryStatus == "ready",
+              let summary = session.summary, !summary.isEmpty,
+              !session.preview.isEmpty
+        else { return false }
+        return session.preview != summary
+            && !summary.contains(session.preview.prefix(min(16, session.preview.count)))
+    }
+
+    @ViewBuilder
+    private func sessionExpandBody(_ session: RecentSession) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            if let detail = session.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else if session.summaryStatus == "pending" || session.summaryStatus == nil {
+                Text("正在生成完整摘要…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if session.summaryStatus == "failed" {
+                Text("完整摘要生成失败，可先看下方用户原话")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !session.recentAsks.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("最近用户原话")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(session.recentAsks.enumerated()), id: \.offset) { _, ask in
+                        Text(ask)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+
+            if session.supportsAnalyze {
+                Button {
+                    store.analyzeConfirmedSession(sourceFile: session.sourceFile)
+                } label: {
+                    Text("通读分析")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(store.isSessionAnalyzing || store.isSessionLocating)
+            } else {
+                Text("\(session.sourceTitle) 会话目前只支持摘要预览")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// Turn a Claude/Cursor project dir name into a readable repo/folder cue.
     private func sessionProject(_ raw: String) -> String {
-        let parts = raw.split(separator: "-").filter { !$0.isEmpty }
-        return parts.suffix(2).joined(separator: "/")
+        // Codex (and similar) use day folders — keep as-is.
+        if raw.count == 10,
+           raw[raw.index(raw.startIndex, offsetBy: 4)] == "-",
+           raw[raw.index(raw.startIndex, offsetBy: 7)] == "-" {
+            return raw
+        }
+        let skip: Set<String> = [
+            "Users", "home", "Downloads", "Desktop", "Documents", "Library",
+            "projects", "repos", "code", "src", "dev", "tmp",
+        ]
+        let parts = raw.split(whereSeparator: { $0 == "-" || $0 == "/" })
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        let meaningful = parts.filter { !skip.contains($0) && !$0.hasPrefix(".") }
+        let use = meaningful.isEmpty ? parts : meaningful
+        guard !use.isEmpty else { return raw }
+        if use.count >= 2, use.suffix(2).allSatisfy({ $0.count <= 16 }) {
+            return use.suffix(2).joined(separator: "-")
+        }
+        return use.last ?? raw
     }
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {

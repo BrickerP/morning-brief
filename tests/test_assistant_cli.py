@@ -169,7 +169,10 @@ def test_cli_summarize_persists_and_skips_cache_hit(tmp_path: Path) -> None:
         projects, "-proj", "55555555-5555-5555-5555-555555555555",
         [{"type": "user", "message": {"content": "总结这条会话"}}],
     )
-    agent_json = {"summary": "排查支付回调，结论已落地，仍需生产回归。"}
+    agent_json = {
+        "summary": "支付回调 · 已修待回归",
+        "detail": "用户要排查支付回调；结论已落地，仍需生产回归。",
+    }
     first = _run_cli(
         tmp_path / "as",
         projects,
@@ -184,6 +187,7 @@ def test_cli_summarize_persists_and_skips_cache_hit(tmp_path: Path) -> None:
     assert payload["summarized"] == 1
     assert payload["skipped"] == 0
     assert payload["sessions"][0]["summary"] == agent_json["summary"]
+    assert payload["sessions"][0]["detail"] == agent_json["detail"]
     assert payload["sessions"][0]["summary_status"] == "ready"
 
     second = _run_cli(
@@ -193,19 +197,22 @@ def test_cli_summarize_persists_and_skips_cache_hit(tmp_path: Path) -> None:
         "summarize",
         "--limit",
         "3",
-        agent_json={"summary": "不应再次调用"},
+        agent_json={"summary": "不应再次调用", "detail": "不应再次调用"},
     )
     assert second.returncode == 0, second.stderr
     again = json.loads(second.stdout)
     assert again["summarized"] == 0
     assert again["skipped"] == 1
     assert again["sessions"][0]["summary"] == agent_json["summary"]
+    assert again["sessions"][0]["detail"] == agent_json["detail"]
 
     listing = _run_cli(tmp_path / "as", projects, "assistant", "sessions", "--limit", "3")
     assert listing.returncode == 0, listing.stderr
     listed = json.loads(listing.stdout)
     assert listed["sessions"][0]["summary"] == agent_json["summary"]
+    assert listed["sessions"][0]["detail"] == agent_json["detail"]
     assert listed["sessions"][0]["summary_status"] == "ready"
+    assert listed["sessions"][0]["recent_asks"] == ["总结这条会话"]
 
 
 def test_cli_locate_matches_pasted_ending(tmp_path: Path) -> None:

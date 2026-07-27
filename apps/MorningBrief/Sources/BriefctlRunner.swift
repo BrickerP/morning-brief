@@ -30,6 +30,7 @@ enum BriefctlCommand {
     case assistantLocate(tail: String)
     case assistantSessions
     case assistantSummarize
+    case assistantSummarizeFile(sessionFile: String)
     case assistantApply(analysisID: String)
 
     var arguments: [String] {
@@ -104,6 +105,8 @@ enum BriefctlCommand {
             ["assistant", "sessions"]
         case .assistantSummarize:
             ["assistant", "summarize"]
+        case let .assistantSummarizeFile(sessionFile):
+            ["assistant", "summarize", "--session-file", sessionFile]
         case let .assistantApply(analysisID):
             ["assistant", "apply", analysisID]
         }

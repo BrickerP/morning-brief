@@ -40,20 +40,20 @@ struct WorkLedgerView: View {
 
     private var overview: some View {
         VStack(alignment: .leading, spacing: DS.Space.sm) {
-            if store.isViewingToday {
-                captureComposer
-            }
+            // Capture + contribution calendar share one chrome block so the span chart keeps height.
+            workTopChrome
 
             WorkDaySpanChart(spans: store.work?.daySpans() ?? []) { item in
                 selectedItemID = item.id
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
 
             if store.isViewingToday, store.work?.latestReversibleEvent != nil {
-                Divider()
                 workFooter
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(captureShortcut)
         .confirmationDialog(
             "删除这个任务？",
@@ -86,11 +86,71 @@ struct WorkLedgerView: View {
             && !store.isWorkMutating
     }
 
-    /// Compact chat-style composer for quick work capture (⌘N to focus).
+    /// Shared top plane: date rail + split heatmap / capture that fills the chrome width.
+    private var workTopChrome: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(store.displayDate)
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                if !store.isViewingToday {
+                    Button("今天") {
+                        store.select(date: BriefPaths.todayDateString())
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    Text("历史")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.15))
+                        .clipShape(Capsule())
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(alignment: .top, spacing: DS.Space.sm) {
+                WorkActivityHeatmap(
+                    selectedDate: store.selectedDate,
+                    counts: store.work?.spanActivityCounts(
+                        endingAt: BriefPaths.todayDateString(),
+                        weeks: 26
+                    ) ?? [:],
+                    preferredWeeks: store.isViewingToday ? 14 : 20
+                ) { day in
+                    store.select(date: day)
+                }
+                .frame(maxWidth: .infinity)
+                .layoutPriority(store.isViewingToday ? 1.15 : 1)
+
+                if store.isViewingToday {
+                    captureComposer
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .layoutPriority(1)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: store.isViewingToday ? 92 : 78)
+        }
+        .padding(DS.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                .fill(DS.Palette.cardFill)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                .strokeBorder(DS.Palette.cardStroke, lineWidth: 1)
+        }
+    }
+
+    /// Full-height chat composer that matches the heatmap pane.
     private var captureComposer: some View {
-        HStack(alignment: .center, spacing: DS.Space.sm) {
+        HStack(alignment: .bottom, spacing: DS.Space.sm) {
             TextField("", text: $captureText)
                 .textFieldStyle(.plain)
+                .font(.callout)
                 .focused($captureFocused)
                 .onSubmit(capture)
                 .disabled(store.isWorkMutating)
@@ -101,10 +161,11 @@ struct WorkLedgerView: View {
                         captureIdempotencyKey = nil
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             Button(action: capture) {
                 Image(systemName: "arrow.up.circle.fill")
-                    .font(.title3)
+                    .font(.title2)
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(canSubmitCapture ? Color.accentColor : Color.secondary.opacity(0.35))
             }
@@ -112,16 +173,16 @@ struct WorkLedgerView: View {
             .disabled(!canSubmitCapture)
             .accessibilityLabel("发送")
         }
-        .padding(.horizontal, DS.Space.md)
-        .padding(.vertical, 10)
+        .padding(DS.Space.sm)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .background(
-            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-                .fill(DS.Palette.cardFill)
+            RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                .fill(Color.primary.opacity(0.04))
         )
         .overlay {
-            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+            RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
                 .strokeBorder(
-                    captureFocused ? Color.accentColor.opacity(0.45) : DS.Palette.cardStroke,
+                    captureFocused ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.06),
                     lineWidth: 1
                 )
         }

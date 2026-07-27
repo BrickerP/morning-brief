@@ -1,22 +1,74 @@
 import SwiftUI
 
-/// GitHub-style contribution grid: columns = weeks, rows = Mon→Sun, fill depth = span count.
+/// GitHub-style contribution grid that fills the offered bounds.
+///
+/// Cell size and week count are derived from the container so the calendar
+/// reads as a dense plane instead of a small left-aligned stamp.
 struct WorkActivityHeatmap: View {
     let selectedDate: String
     let counts: [String: Int]
-    var weeks: Int = 13
+    /// Soft preference; actual weeks shrink/grow to fill width.
+    var preferredWeeks: Int = 16
     let onSelectDay: (String) -> Void
 
-    private let cell: CGFloat = 11
-    private let gap: CGFloat = 2
     private let today = BriefPaths.todayDateString()
+    private let minCell: CGFloat = 7
+    private let maxCell: CGFloat = 13
+    private let gap: CGFloat = 2
+    private let labelWidth: CGFloat = 10
 
     private var maxCount: Int {
         counts.values.max() ?? 0
     }
 
-    /// Week columns; each column is Mon…Sun (`nil` = padding outside the data window).
-    private var columns: [[String?]] {
+    var body: some View {
+        GeometryReader { geo in
+            let metrics = layoutMetrics(in: geo.size)
+            let columns = weekColumns(weeks: metrics.weeks)
+            HStack(alignment: .top, spacing: 3) {
+                weekdayLabels(cell: metrics.cell)
+                HStack(spacing: gap) {
+                    ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
+                        VStack(spacing: gap) {
+                            ForEach(0..<7, id: \.self) { row in
+                                cellView(column[safe: row] ?? nil, cell: metrics.cell)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("工作跨度日历")
+    }
+
+    private struct Metrics {
+        let cell: CGFloat
+        let weeks: Int
+    }
+
+    private func layoutMetrics(in size: CGSize) -> Metrics {
+        let safeWidth = max(0, size.width - labelWidth - 3)
+        let safeHeight = max(0, size.height)
+        // Prefer height-driven cells so 7 rows consume the pane.
+        let cellFromHeight = safeHeight > 0
+            ? (safeHeight - gap * 6) / 7
+            : minCell
+        var cell = min(maxCell, max(minCell, cellFromHeight))
+        let weeksFromWidth = Int(floor((safeWidth + gap) / (cell + gap)))
+        let weeks = max(8, min(26, weeksFromWidth > 0 ? weeksFromWidth : preferredWeeks))
+        // Re-fit cell to consume leftover horizontal space without exceeding height fit.
+        if weeks > 0 {
+            let cellFromWidth = (safeWidth - CGFloat(weeks - 1) * gap) / CGFloat(weeks)
+            cell = min(cell, min(maxCell, max(minCell, cellFromWidth)))
+        }
+        return Metrics(cell: cell, weeks: weeks)
+    }
+
+    /// Week columns; each column is Mon…Sun (`nil` = padding / future).
+    private func weekColumns(weeks: Int) -> [[String?]] {
         guard weeks > 0,
               let rawStart = BriefPaths.dayString(byAddingDays: -(weeks * 7 - 1), to: today),
               let alignedStart = mondayOnOrBefore(rawStart),
@@ -40,54 +92,36 @@ struct WorkActivityHeatmap: View {
             result.append(column)
             index += 7
         }
-        // Keep the most recent `weeks` columns if padding expanded the range.
         if result.count > weeks {
             result = Array(result.suffix(weeks))
         }
         return result
     }
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 4) {
-            weekdayLabels
-            HStack(spacing: gap) {
-                ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
-                    VStack(spacing: gap) {
-                        ForEach(0..<7, id: \.self) { row in
-                            cellView(column[row])
-                        }
-                    }
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("工作跨度日历")
-    }
-
-    private var weekdayLabels: some View {
+    private func weekdayLabels(cell: CGFloat) -> some View {
         VStack(spacing: gap) {
             ForEach(Array(["一", "二", "三", "四", "五", "六", "日"].enumerated()), id: \.offset) { index, label in
                 Text(index % 2 == 0 ? label : "")
-                    .font(.system(size: 8))
+                    .font(.system(size: max(7, cell * 0.75)))
                     .foregroundStyle(.tertiary)
-                    .frame(width: 12, height: cell, alignment: .trailing)
+                    .frame(width: labelWidth, height: cell, alignment: .trailing)
             }
         }
     }
 
     @ViewBuilder
-    private func cellView(_ day: String?) -> some View {
+    private func cellView(_ day: String?, cell: CGFloat) -> some View {
         if let day {
             let count = counts[day, default: 0]
             let selected = day == selectedDate
             Button {
                 onSelectDay(day)
             } label: {
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                RoundedRectangle(cornerRadius: max(1.5, cell * 0.22), style: .continuous)
                     .fill(fillColor(for: count))
                     .frame(width: cell, height: cell)
                     .overlay {
-                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        RoundedRectangle(cornerRadius: max(1.5, cell * 0.22), style: .continuous)
                             .strokeBorder(
                                 selected ? Color.primary.opacity(0.85) : Color.clear,
                                 lineWidth: selected ? 1.5 : 0
@@ -119,7 +153,6 @@ struct WorkActivityHeatmap: View {
         } else {
             level = 0.9
         }
-        // Green contribution scale (readable in light/dark via opacity on a solid green).
         return Color(red: 0.22, green: 0.62, blue: 0.36).opacity(level)
     }
 
@@ -127,7 +160,6 @@ struct WorkActivityHeatmap: View {
         guard let start = BriefPaths.startOfDay(forDateString: day) else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = BriefPaths.dayTimeZone
-        // weekday: 1 = Sunday … 7 = Saturday. Convert to days since Monday.
         let weekday = calendar.component(.weekday, from: start)
         let daysFromMonday = (weekday + 5) % 7
         return BriefPaths.dayString(byAddingDays: -daysFromMonday, to: day)
@@ -140,5 +172,12 @@ struct WorkActivityHeatmap: View {
         let weekday = calendar.component(.weekday, from: start)
         let daysToSunday = (8 - weekday) % 7
         return BriefPaths.dayString(byAddingDays: daysToSunday, to: day)
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        guard indices.contains(index) else { return nil }
+        return self[index]
     }
 }

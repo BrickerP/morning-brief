@@ -21,6 +21,8 @@ final class BriefStore: ObservableObject {
     @Published private(set) var isSessionAnalyzing = false
     @Published private(set) var isSessionApplying = false
     @Published private(set) var isSessionSummarizing = false
+    /// Progress for the in-flight per-session summarize loop (`completed` includes failures).
+    @Published private(set) var sessionSummaryProgress: (completed: Int, total: Int)?
 
     /// Day currently being viewed (`yyyy-MM-dd`). Defaults to today in `BriefPaths.dayTimeZone`.
     @Published private(set) var selectedDate: String = BriefPaths.todayDateString()
@@ -503,12 +505,16 @@ final class BriefStore: ObservableObject {
 
     /// Persist agent summaries for listed sessions that lack a fingerprint cache hit.
     ///
-    /// One summarize pass at a time (backend is also sequential per session).
+    /// Runs **one session at a time** and refreshes the list after each finish so
+    /// the UI does not look frozen until the whole batch returns.
     private func ensureRecentSessionSummaries() {
-        let needsWork = recentSessions.contains { session in
-            session.summaryStatus == "pending" || session.summaryStatus == nil
+        let pendingFiles = recentSessions.compactMap { session -> String? in
+            guard session.summaryStatus == "pending" || session.summaryStatus == nil else {
+                return nil
+            }
+            return session.sourceFile
         }
-        guard needsWork, !isSessionSummarizing else { return }
+        guard !pendingFiles.isEmpty, !isSessionSummarizing else { return }
         // Avoid stacking passes when the panel is toggled while a prior pass just finished
         // and fingerprints are mid-write.
         if let lastSummaryEnsureAt, Date().timeIntervalSince(lastSummaryEnsureAt) < 8 {
@@ -516,16 +522,30 @@ final class BriefStore: ObservableObject {
         }
         lastSummaryEnsureAt = Date()
         isSessionSummarizing = true
+        sessionSummaryProgress = (completed: 0, total: pendingFiles.count)
         summaryTask?.cancel()
         summaryTask = Task {
-            defer { isSessionSummarizing = false }
+            defer {
+                isSessionSummarizing = false
+                sessionSummaryProgress = nil
+            }
             do {
-                let result = try await runner.run(.assistantSummarize)
-                let payload = try decoder.decode(
-                    RecentSessionSummarizeResult.self,
-                    from: Data(result.stdout.utf8)
-                )
-                recentSessions = payload.sessions
+                for (index, sourceFile) in pendingFiles.enumerated() {
+                    try Task.checkCancellation()
+                    do {
+                        _ = try await runner.run(.assistantSummarizeFile(sessionFile: sourceFile))
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        // Keep going so one slow/failed session does not block the rest.
+                    }
+                    sessionSummaryProgress = (completed: index + 1, total: pendingFiles.count)
+                    let listed = try await runner.run(.assistantSessions)
+                    recentSessions = try decoder.decode(
+                        RecentSessionList.self,
+                        from: Data(listed.stdout.utf8)
+                    ).sessions
+                }
             } catch is CancellationError {
                 lastSummaryEnsureAt = nil
             } catch {
@@ -541,6 +561,7 @@ final class BriefStore: ObservableObject {
         // Prefer the interactive full analysis over background list summarization.
         summaryTask?.cancel()
         isSessionSummarizing = false
+        sessionSummaryProgress = nil
         isSessionAnalyzing = true
         errorMessage = nil
         notice = "Agent 正在通读该 Claude session…"

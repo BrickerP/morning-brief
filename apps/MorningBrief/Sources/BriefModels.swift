@@ -869,17 +869,22 @@ struct RecentSession: Codable, Identifiable, Hashable {
     let subagentCount: Int
     /// Cheap JSONL snippet (first user/summary line). Fallback while agent summary is pending.
     let preview: String
+    /// Latest substantive user asks (oldest → newest) for expand-panel evidence.
+    let recentAsks: [String]
     /// Persisted agent CLI summary for this session fingerprint; nil until generated.
     let summary: String?
+    /// Fuller expand-panel brief from the same summarize pass; nil until generated.
+    let detail: String?
     /// `ready` | `pending` | `failed` from briefctl assistant sessions/summarize.
     let summaryStatus: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, source, project, preview, summary
+        case id, source, project, preview, summary, detail
         case sourceFile = "source_file"
         case modifiedAt = "modified_at"
         case subagentCount = "subagent_count"
         case summaryStatus = "summary_status"
+        case recentAsks = "recent_asks"
     }
 
     init(
@@ -890,7 +895,9 @@ struct RecentSession: Codable, Identifiable, Hashable {
         modifiedAt: String,
         subagentCount: Int,
         preview: String,
+        recentAsks: [String] = [],
         summary: String?,
+        detail: String? = nil,
         summaryStatus: String?
     ) {
         self.id = id
@@ -900,7 +907,9 @@ struct RecentSession: Codable, Identifiable, Hashable {
         self.modifiedAt = modifiedAt
         self.subagentCount = subagentCount
         self.preview = preview
+        self.recentAsks = recentAsks
         self.summary = summary
+        self.detail = detail
         self.summaryStatus = summaryStatus
     }
 
@@ -913,7 +922,9 @@ struct RecentSession: Codable, Identifiable, Hashable {
         modifiedAt = try container.decode(String.self, forKey: .modifiedAt)
         subagentCount = try container.decode(Int.self, forKey: .subagentCount)
         preview = try container.decode(String.self, forKey: .preview)
+        recentAsks = try container.decodeIfPresent([String].self, forKey: .recentAsks) ?? []
         summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        detail = try container.decodeIfPresent(String.self, forKey: .detail)
         summaryStatus = try container.decodeIfPresent(String.self, forKey: .summaryStatus)
     }
 

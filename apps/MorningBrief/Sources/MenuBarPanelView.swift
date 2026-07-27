@@ -149,15 +149,17 @@ struct MenuBarPanelView: View {
     private var readableSections: [BriefSection] { store.brief?.readableSections ?? [] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            lensPicker
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
+            titleBar
             noticeBanner
             if selectedLens == .work {
                 WorkLedgerView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if selectedLens == .agent {
+                dateChrome
                 AgentChatView()
             } else {
+                dateChrome
                 Group {
                     if hasContent {
                         contentScroll
@@ -168,8 +170,9 @@ struct MenuBarPanelView: View {
                 footer
             }
         }
-        .padding(20)
-        .frame(width: 440, height: 600)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(width: 460, height: 720)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             if selectedLens == .work {
@@ -254,33 +257,53 @@ struct MenuBarPanelView: View {
 
     // MARK: Header
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: DS.Space.sm) {
+    /// Brand + lens switcher on one row so tabs sit with the product name.
+    private var titleBar: some View {
+        HStack(alignment: .center, spacing: DS.Space.sm) {
             Text("Morning Brief")
-                .font(.title3.weight(.semibold))
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(store.displayDate)
-                    .font(.subheadline.weight(.medium))
-                    .monospacedDigit()
-                if !store.isViewingToday {
-                    Button("今天") {
-                        store.select(date: BriefPaths.todayDateString())
-                    }
-                    .font(.caption2.weight(.semibold))
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    tinyBadge("历史", background: Color.secondary.opacity(0.15))
-                } else if hasContent && store.isStale {
-                    tinyBadge("陈旧", background: Color.orange.opacity(0.2))
-                }
-                Spacer(minLength: 0)
-            }
+                .font(.headline.weight(.semibold))
+                .lineLimit(1)
+            lensPicker
+                .frame(maxWidth: 260)
+        }
+    }
+
+    /// Compact date + contribution grid (Agent / 晨报). Work lens owns its own chrome with capture.
+    private var dateChrome: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            dateMetaRow
             WorkActivityHeatmap(
                 selectedDate: store.selectedDate,
-                counts: store.work?.spanActivityCounts(endingAt: BriefPaths.todayDateString()) ?? [:]
+                counts: store.work?.spanActivityCounts(
+                    endingAt: BriefPaths.todayDateString(),
+                    weeks: 26
+                ) ?? [:],
+                preferredWeeks: 18
             ) { day in
                 store.select(date: day)
             }
+            .frame(maxWidth: .infinity)
+            .frame(height: 78)
+        }
+    }
+
+    private var dateMetaRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(store.displayDate)
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+            if !store.isViewingToday {
+                Button("今天") {
+                    store.select(date: BriefPaths.todayDateString())
+                }
+                .font(.caption2.weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                tinyBadge("历史", background: Color.secondary.opacity(0.15))
+            } else if selectedLens == .brief, hasContent && store.isStale {
+                tinyBadge("陈旧", background: Color.orange.opacity(0.2))
+            }
+            Spacer(minLength: 0)
         }
     }
 

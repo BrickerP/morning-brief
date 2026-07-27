@@ -8,10 +8,13 @@ struct WorkDaySpanChart: View {
     @State private var hoveredID: String?
     @State private var statusFilter: Set<WorkStatus> = []
 
-    private let dayRowHeight: CGFloat = 28
-    private let dateGutter: CGFloat = 44
-    private let laneWidth: CGFloat = 76
-    private let headerHeight: CGFloat = 52
+    private let minDayRowHeight: CGFloat = 22
+    private let maxDayRowHeight: CGFloat = 36
+    private let dateGutter: CGFloat = 40
+    private let minLaneWidth: CGFloat = 64
+    private let maxLaneWidth: CGFloat = 120
+    private let headerHeight: CGFloat = 48
+    private let laneSpacing: CGFloat = 6
 
     private var chartDays: [String] {
         spans.first?.chartDays ?? []
@@ -39,22 +42,28 @@ struct WorkDaySpanChart: View {
         return result
     }
 
-    private var timelineHeight: CGFloat {
-        max(dayRowHeight, CGFloat(chartDays.count) * dayRowHeight)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.Space.sm) {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
             statusLegend
             if spans.isEmpty {
                 emptyState
             } else {
-                hoverCard
-                chartScroll
+                GeometryReader { geo in
+                    let layout = chartLayout(in: geo.size)
+                    ZStack(alignment: .topLeading) {
+                        chartCanvas(layout: layout, size: geo.size)
+                        if let span = hoveredSpan {
+                            hoverCard(span)
+                                .padding(6)
+                                .transition(.opacity)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .animation(.easeInOut(duration: 0.22), value: hoveredID)
+        .animation(.easeInOut(duration: 0.15), value: hoveredID)
     }
 
     private var emptyState: some View {
@@ -66,30 +75,25 @@ struct WorkDaySpanChart: View {
     }
 
     private var statusLegend: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: DS.Space.xs) {
-                Text("任务跨度")
-                    .font(.caption.weight(.semibold))
-                Text("\(spans.count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if !statusFilter.isEmpty {
-                    Button("显示全部") {
-                        statusFilter = []
-                    }
-                    .font(.caption2)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-            }
+        HStack(spacing: 6) {
+            Text("\(spans.count)")
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     ForEach(statusOrder, id: \.self) { status in
                         let count = counts[status, default: 0]
                         statusChip(status, count: count)
                     }
                 }
+            }
+            if !statusFilter.isEmpty {
+                Button("全部") {
+                    statusFilter = []
+                }
+                .font(.caption2)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
         }
     }
@@ -138,92 +142,90 @@ struct WorkDaySpanChart: View {
         }
     }
 
-    private var hoverCard: some View {
-        ZStack(alignment: .topLeading) {
-            // Stable slot so hover in/out doesn't jump the chart.
-            RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
-                .fill(Color.primary.opacity(0.03))
-                .frame(maxWidth: .infinity)
-                .frame(height: 78)
-
-            if let span = hoveredSpan {
-                let item = span.item
-                Button {
-                    onSelect(item)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: item.status.iconName)
-                                .foregroundStyle(item.status.chartTint)
-                            Text(item.title)
-                                .font(.caption.weight(.semibold))
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                            Text(item.status.title)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(item.status.chartTint)
-                        }
-                        HStack(spacing: 8) {
-                            Text(dateRangeLabel(span))
-                            Text("·")
-                            Text("\(span.spanDayCount) 天")
-                            if let duration = item.wallClockDurationLabel {
-                                Text("·")
-                                Text(duration.replacingOccurrences(of: "已持续 ", with: ""))
-                            }
-                        }
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        if let progress = item.lastProgress, !progress.isEmpty {
-                            Text(progress)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
-                            .fill(item.status.chartTint.opacity(0.1))
-                    )
-                    .overlay {
-                        RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
-                            .strokeBorder(item.status.chartTint.opacity(0.28), lineWidth: 1)
-                    }
-                }
-                .buttonStyle(.plain)
-                .frame(height: 78)
-                .transition(.opacity)
-            }
-        }
-        .frame(height: 78)
+    private struct ChartLayout {
+        let dayRowHeight: CGFloat
+        let laneWidth: CGFloat
+        let timelineHeight: CGFloat
+        let contentWidth: CGFloat
+        let contentHeight: CGFloat
+        let fillsHeight: Bool
+        let fillsWidth: Bool
     }
 
-    private var chartScroll: some View {
-        ScrollView([.horizontal, .vertical], showsIndicators: true) {
-            HStack(alignment: .top, spacing: 0) {
-                dateScale
-                    .frame(width: dateGutter)
-                HStack(alignment: .top, spacing: 8) {
-                    ForEach(visibleSpans) { span in
-                        laneColumn(span)
-                            .frame(width: laneWidth)
-                    }
-                }
-                .padding(.trailing, DS.Space.sm)
-            }
-            .padding(.bottom, DS.Space.sm)
+    private func chartLayout(in size: CGSize) -> ChartLayout {
+        let dayCount = max(chartDays.count, 1)
+        let laneCount = max(visibleSpans.count, 1)
+        let availableTimeline = max(minDayRowHeight, size.height - headerHeight)
+        let naturalTimeline = CGFloat(dayCount) * minDayRowHeight
+        let fillsHeight = naturalTimeline <= availableTimeline
+        let dayRowHeight: CGFloat
+        let timelineHeight: CGFloat
+        if fillsHeight {
+            dayRowHeight = min(maxDayRowHeight, availableTimeline / CGFloat(dayCount))
+            timelineHeight = dayRowHeight * CGFloat(dayCount)
+        } else {
+            dayRowHeight = minDayRowHeight
+            timelineHeight = naturalTimeline
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
-                .fill(Color.primary.opacity(0.03))
+
+        let lanesBudget = max(0, size.width - dateGutter - DS.Space.sm)
+        let spacingTotal = laneSpacing * CGFloat(max(laneCount - 1, 0))
+        let naturalLanes = CGFloat(laneCount) * minLaneWidth + spacingTotal
+        let fillsWidth = naturalLanes <= lanesBudget
+        let laneWidth: CGFloat
+        if fillsWidth, laneCount > 0 {
+            let raw = (lanesBudget - spacingTotal) / CGFloat(laneCount)
+            laneWidth = min(maxLaneWidth, max(minLaneWidth, raw))
+        } else {
+            laneWidth = minLaneWidth
+        }
+
+        let contentWidth = dateGutter
+            + CGFloat(laneCount) * laneWidth
+            + spacingTotal
+            + DS.Space.sm
+        let contentHeight = headerHeight + timelineHeight
+        return ChartLayout(
+            dayRowHeight: dayRowHeight,
+            laneWidth: laneWidth,
+            timelineHeight: timelineHeight,
+            contentWidth: max(contentWidth, size.width),
+            contentHeight: fillsHeight ? max(contentHeight, size.height) : contentHeight,
+            fillsHeight: fillsHeight,
+            fillsWidth: fillsWidth
         )
     }
 
-    private var dateScale: some View {
+    private func chartCanvas(layout: ChartLayout, size: CGSize) -> some View {
+        let canvas = HStack(alignment: .top, spacing: 0) {
+            dateScale(dayRowHeight: layout.dayRowHeight)
+                .frame(width: dateGutter)
+            HStack(alignment: .top, spacing: laneSpacing) {
+                ForEach(visibleSpans) { span in
+                    laneColumn(span, layout: layout)
+                        .frame(width: layout.laneWidth)
+                }
+            }
+            .frame(maxWidth: layout.fillsWidth ? .infinity : nil, alignment: .leading)
+            if layout.fillsWidth {
+                Spacer(minLength: 0)
+            }
+        }
+        .frame(
+            width: layout.fillsWidth ? size.width : layout.contentWidth,
+            height: layout.fillsHeight ? size.height : layout.contentHeight,
+            alignment: .topLeading
+        )
+        .background(Color.primary.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous))
+
+        return ScrollView([.horizontal, .vertical], showsIndicators: true) {
+            canvas
+        }
+        .frame(width: size.width, height: size.height)
+    }
+
+    private func dateScale(dayRowHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: headerHeight)
             VStack(spacing: 0) {
@@ -246,24 +248,24 @@ struct WorkDaySpanChart: View {
         return day
     }
 
-    private func laneColumn(_ span: WorkDaySpan) -> some View {
+    private func laneColumn(_ span: WorkDaySpan, layout: ChartLayout) -> some View {
         let status = span.item.status
         let tint = Self.laneTint(for: span.item.id, status: status)
         let dimmed = hoveredID != nil && hoveredID != span.id
+        let range = span.yRange(in: Double(layout.timelineHeight))
         return Button {
             onSelect(span.item)
         } label: {
-            VStack(spacing: 4) {
+            VStack(spacing: 0) {
                 laneHeader(span)
-                    .frame(height: headerHeight - 4, alignment: .bottom)
+                    .frame(height: headerHeight)
 
                 ZStack(alignment: .top) {
-                    // Day grid
                     VStack(spacing: 0) {
                         ForEach(Array(chartDays.enumerated()), id: \.offset) { _, day in
                             Rectangle()
-                                .fill(Color.primary.opacity(day == BriefPaths.todayDateString() ? 0.06 : 0.03))
-                                .frame(height: dayRowHeight)
+                                .fill(Color.primary.opacity(day == BriefPaths.todayDateString() ? 0.06 : 0.025))
+                                .frame(height: layout.dayRowHeight)
                                 .overlay(alignment: .top) {
                                     Rectangle()
                                         .fill(Color.primary.opacity(0.06))
@@ -272,24 +274,23 @@ struct WorkDaySpanChart: View {
                         }
                     }
 
-                    let range = span.yRange(in: Double(timelineHeight))
                     spanBar(span, tint: tint)
-                        .frame(width: max(14, laneWidth - 28), height: CGFloat(range.height))
+                        .frame(width: max(12, layout.laneWidth - 20), height: max(layout.dayRowHeight - 4, CGFloat(range.height) - 4))
+                        .padding(.top, 2)
                         .offset(y: CGFloat(range.y))
                 }
-                .frame(height: timelineHeight, alignment: .top)
+                .frame(height: layout.timelineHeight, alignment: .top)
+                .clipped()
             }
-            .opacity(dimmed ? 0.55 : 1)
+            .opacity(dimmed ? 0.45 : 1)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.22)) {
-                if hovering {
-                    hoveredID = span.id
-                } else if hoveredID == span.id {
-                    hoveredID = nil
-                }
+            if hovering {
+                hoveredID = span.id
+            } else if hoveredID == span.id {
+                hoveredID = nil
             }
         }
         .accessibilityLabel(accessibilityLabel(for: span))
@@ -313,8 +314,9 @@ struct WorkDaySpanChart: View {
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.horizontal, 2)
+        .padding(.bottom, 4)
     }
 
     @ViewBuilder
@@ -339,6 +341,57 @@ struct WorkDaySpanChart: View {
                     .padding(.bottom, 5)
             }
         }
+    }
+
+    private func hoverCard(_ span: WorkDaySpan) -> some View {
+        let item = span.item
+        return Button {
+            onSelect(item)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: item.status.iconName)
+                        .foregroundStyle(item.status.chartTint)
+                    Text(item.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text(item.status.title)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(item.status.chartTint)
+                }
+                HStack(spacing: 8) {
+                    Text(dateRangeLabel(span))
+                    Text("·")
+                    Text("\(span.spanDayCount) 天")
+                    if let duration = item.wallClockDurationLabel {
+                        Text("·")
+                        Text(duration.replacingOccurrences(of: "已持续 ", with: ""))
+                    }
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                if let progress = item.lastProgress, !progress.isEmpty {
+                    Text(progress)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: 280, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                    .strokeBorder(item.status.chartTint.opacity(0.35), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+        }
+        .buttonStyle(.plain)
     }
 
     private func barFill(status: WorkStatus, tint: Color) -> Color {
