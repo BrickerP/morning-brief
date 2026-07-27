@@ -16,6 +16,13 @@ enum BriefctlCommand {
     )
     case todoStatus(id: String, status: WorkStatus, expectedVersion: Int)
     case todoNote(id: String, text: String, expectedVersion: Int, idempotencyKey: String)
+    case todoNoteEdit(
+        id: String,
+        eventID: String,
+        text: String,
+        expectedVersion: Int,
+        idempotencyKey: String
+    )
     case todoDelete(id: String, expectedVersion: Int, idempotencyKey: String)
     case todoUndo(eventID: String, expectedVersion: Int)
     case assistantAnalyze(tail: String)
@@ -61,6 +68,13 @@ enum BriefctlCommand {
         case let .todoNote(id, text, expectedVersion, idempotencyKey):
             [
                 "todo", "note", id, text,
+                "--actor", "human",
+                "--expected-version", String(expectedVersion),
+                "--idempotency-key", idempotencyKey
+            ]
+        case let .todoNoteEdit(id, eventID, text, expectedVersion, idempotencyKey):
+            [
+                "todo", "note-edit", id, eventID, text,
                 "--actor", "human",
                 "--expected-version", String(expectedVersion),
                 "--idempotency-key", idempotencyKey

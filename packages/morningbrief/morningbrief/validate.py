@@ -123,6 +123,7 @@ def _validate_work_ledger_fallback(data: dict[str, Any]) -> None:
                 "edited",
                 "status_changed",
                 "progress_added",
+                "progress_edited",
                 "tombstoned",
                 "reverted",
             ):

@@ -369,6 +369,27 @@ final class BriefStore: ObservableObject {
         )
     }
 
+    func editProgress(
+        itemID: String,
+        eventID: String,
+        text: String,
+        version: Int,
+        idempotencyKey: String,
+        onSuccess: @escaping () -> Void
+    ) {
+        runWorkMutation(
+            .todoNoteEdit(
+                id: itemID,
+                eventID: eventID,
+                text: text,
+                expectedVersion: version,
+                idempotencyKey: idempotencyKey
+            ),
+            successNotice: "进展已更新",
+            onSuccess: onSuccess
+        )
+    }
+
     func deleteWork(itemID: String, version: Int, onSuccess: (() -> Void)? = nil) {
         runWorkMutation(
             .todoDelete(

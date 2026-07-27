@@ -294,6 +294,11 @@ struct WorkEvent: Codable, Identifiable, Hashable {
         case "progress_added":
             if case .string(let text)? = payload["text"] { return text }
             return "追加了进展"
+        case "progress_edited":
+            if case .string(let text)? = payload["text"] { return "修订进展：\(text)" }
+            return "修订了进展"
+        case "tombstoned":
+            return "已删除（可撤销）"
         case "reverted":
             return "撤销了一次变更"
         default:
@@ -335,6 +340,40 @@ struct WorkItem: Codable, Identifiable, Hashable {
             if case .string(let text)? = event.payload["text"] { return text }
         }
         return nil
+    }
+
+    var createdAtDate: Date? {
+        BriefDateParser.iso8601Fractional.date(from: createdAt)
+            ?? BriefDateParser.iso8601.date(from: createdAt)
+    }
+
+    /// Wall-clock age chrome: created → now (active) or → last update when terminal.
+    var wallClockDurationLabel: String? {
+        guard let start = createdAtDate else { return nil }
+        let end: Date
+        if status == .completed || status == .cancelled {
+            end = lastEventDate ?? start
+        } else {
+            end = Date()
+        }
+        let seconds = max(0, Int(end.timeIntervalSince(start)))
+        return Self.formatDuration(seconds)
+    }
+
+    private static func formatDuration(_ seconds: Int) -> String {
+        let days = seconds / 86_400
+        let hours = (seconds % 86_400) / 3_600
+        let minutes = (seconds % 3_600) / 60
+        if days > 0 {
+            return hours > 0 ? "已持续 \(days) 天 \(hours) 小时" : "已持续 \(days) 天"
+        }
+        if hours > 0 {
+            return minutes > 0 ? "已持续 \(hours) 小时 \(minutes) 分" : "已持续 \(hours) 小时"
+        }
+        if minutes > 0 {
+            return "已持续 \(minutes) 分"
+        }
+        return "已持续不到 1 分"
     }
 
     func isEventReverted(_ event: WorkEvent) -> Bool {
@@ -462,10 +501,52 @@ struct WorkDocument: Codable {
         return events
             .filter {
                 !revertedIDs.contains($0.eventId)
-                    && ["created", "edited", "status_changed", "progress_added", "tombstoned"].contains($0.kind)
+                    && [
+                        "created",
+                        "edited",
+                        "status_changed",
+                        "progress_added",
+                        "progress_edited",
+                        "tombstoned",
+                    ].contains($0.kind)
             }
             .max { $0.sequence < $1.sequence }
     }
+
+    /// Mixed day river: mutation events for the projection day, newest-first.
+    var dayTimeline: [WorkTimelineEntry] {
+        let day = self.date
+        var entries: [WorkTimelineEntry] = []
+        for item in items {
+            for event in item.events {
+                guard !item.isEventReverted(event) else { continue }
+                guard [
+                    "created",
+                    "edited",
+                    "status_changed",
+                    "progress_added",
+                    "tombstoned",
+                ].contains(event.kind) else { continue }
+                guard let occurred = event.occurredAtDate else { continue }
+                let eventDay = BriefPaths.dayString(for: occurred)
+                guard eventDay == day else { continue }
+                entries.append(
+                    WorkTimelineEntry(
+                        id: event.eventId,
+                        event: event,
+                        item: item
+                    )
+                )
+            }
+        }
+        return entries.sorted { $0.event.sequence > $1.event.sequence }
+    }
+}
+
+struct WorkTimelineEntry: Identifiable, Hashable {
+    let id: String
+    let event: WorkEvent
+    let item: WorkItem
 }
 
 struct ClaudeSessionMatch: Codable, Hashable {

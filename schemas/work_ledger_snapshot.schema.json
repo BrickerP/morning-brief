@@ -63,6 +63,7 @@
             "edited",
             "status_changed",
             "progress_added",
+            "progress_edited",
             "tombstoned",
             "reverted"
           ]

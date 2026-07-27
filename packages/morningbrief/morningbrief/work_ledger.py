@@ -19,7 +19,14 @@ WorkStatus = Literal["pending", "in_progress", "completed", "cancelled"]
 
 ACTORS = {"human", "agent", "system"}
 STATUSES = {"pending", "in_progress", "completed", "cancelled"}
-MUTATION_KINDS = {"created", "edited", "status_changed", "progress_added", "tombstoned"}
+MUTATION_KINDS = {
+    "created",
+    "edited",
+    "status_changed",
+    "progress_added",
+    "progress_edited",
+    "tombstoned",
+}
 
 
 class LedgerError(ValueError):
@@ -199,6 +206,21 @@ class WorkLedger:
                 item["status"] = payload["status"]
             elif event["kind"] == "tombstoned":
                 item["tombstoned"] = True
+            elif event["kind"] == "progress_edited":
+                target_id = event.get("target_event_id")
+                new_text = payload.get("text")
+                if not target_id or not isinstance(new_text, str):
+                    continue
+                for index, existing in enumerate(item["events"]):
+                    if (
+                        existing["event_id"] == target_id
+                        and existing["kind"] == "progress_added"
+                    ):
+                        item["events"][index] = {
+                            **existing,
+                            "payload": {**existing.get("payload", {}), "text": new_text},
+                        }
+                        break
         return items
 
     def _day_end(self, day: str) -> datetime:
@@ -421,6 +443,25 @@ class WorkLedger:
                         raise ConflictError(
                             f"work item is tombstoned and only undo is allowed: {actual_item_id}"
                         )
+                    if kind == "progress_edited":
+                        target = next(
+                            (event for event in events if event["event_id"] == target_event_id),
+                            None,
+                        )
+                        reverted_targets = {
+                            event["target_event_id"]
+                            for event in events
+                            if event["kind"] == "reverted" and event["target_event_id"]
+                        }
+                        if (
+                            target is None
+                            or target["item_id"] != actual_item_id
+                            or target["kind"] != "progress_added"
+                            or target_event_id in reverted_targets
+                        ):
+                            raise NotFoundError(
+                                f"editable progress event not found: {target_event_id}"
+                            )
                     if kind == "reverted":
                         targets = {
                             event["target_event_id"]
@@ -543,6 +584,25 @@ class WorkLedger:
             raise LedgerError("progress text must not be empty")
         return self._append(
             item_id=item_id, kind="progress_added", payload={"text": clean_text}, **kwargs
+        )
+
+    def edit_progress(
+        self,
+        item_id: str,
+        event_id: str,
+        text: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Append a progress_edited event that overlays text onto a progress_added node."""
+        clean_text = text.strip()
+        if not clean_text:
+            raise LedgerError("progress text must not be empty")
+        return self._append(
+            item_id=item_id,
+            kind="progress_edited",
+            payload={"text": clean_text},
+            target_event_id=event_id,
+            **kwargs,
         )
 
     def delete(

@@ -90,6 +90,15 @@ def main(argv: list[str] | None = None) -> None:
     p_todo_note.add_argument("text")
     _add_mutation_arguments(p_todo_note)
 
+    p_todo_note_edit = todo_sub.add_parser(
+        "note-edit",
+        help="Edit the text of an existing progress_added event (append-only overlay)",
+    )
+    p_todo_note_edit.add_argument("item_id")
+    p_todo_note_edit.add_argument("event_id")
+    p_todo_note_edit.add_argument("text")
+    _add_mutation_arguments(p_todo_note_edit)
+
     p_todo_delete = todo_sub.add_parser(
         "delete",
         help="Hide a pending/in_progress item from projections (append-only tombstone)",
@@ -246,6 +255,18 @@ def main(argv: list[str] | None = None) -> None:
             elif args.todo_cmd == "note":
                 result = ledger.add_progress(
                     args.item_id,
+                    args.text,
+                    actor=args.actor,
+                    reason=args.reason,
+                    evidence=args.evidence,
+                    idempotency_key=args.idempotency_key,
+                    expected_version=args.expected_version,
+                    occurred_at=None,
+                )
+            elif args.todo_cmd == "note-edit":
+                result = ledger.edit_progress(
+                    args.item_id,
+                    args.event_id,
                     args.text,
                     actor=args.actor,
                     reason=args.reason,

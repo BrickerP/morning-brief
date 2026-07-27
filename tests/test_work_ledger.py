@@ -370,6 +370,54 @@ def test_fallback_validator_requires_event_sequence(tmp_path: Path) -> None:
         validate_module.jsonschema = original_jsonschema
 
 
+def test_edit_progress_overlays_text_and_undo_restores(tmp_path: Path) -> None:
+    ledger = make_ledger(tmp_path)
+    created = ledger.add("长期任务", item_id="long", occurred_at=at(23, 7))
+    noted = ledger.add_progress(
+        "long",
+        "旧进展",
+        actor="human",
+        reason=None,
+        evidence=[],
+        idempotency_key="note-1",
+        expected_version=1,
+        occurred_at=at(23, 8),
+    )
+    edited = ledger.edit_progress(
+        "long",
+        noted["event"]["event_id"],
+        "新进展：已对账",
+        actor="human",
+        reason=None,
+        evidence=[],
+        idempotency_key="note-edit-1",
+        expected_version=2,
+        occurred_at=at(23, 9),
+    )
+    assert edited["event"]["kind"] == "progress_edited"
+    progress = [
+        event
+        for event in edited["item"]["events"]
+        if event["kind"] == "progress_added"
+    ]
+    assert progress[-1]["payload"]["text"] == "新进展：已对账"
+
+    restored = ledger.undo(
+        event_id=edited["event"]["event_id"],
+        actor="human",
+        reason="写错了",
+        expected_version=3,
+        occurred_at=at(23, 10),
+    )
+    progress_after = [
+        event
+        for event in restored["item"]["events"]
+        if event["kind"] == "progress_added"
+    ]
+    assert progress_after[-1]["payload"]["text"] == "旧进展"
+    assert created["item"]["id"] == "long"
+
+
 def test_delete_tombstones_hides_from_projection_and_supports_undo(tmp_path: Path) -> None:
     ledger = make_ledger(tmp_path)
     ledger.add("误记任务", item_id="gone", occurred_at=at(23, 7))

@@ -66,6 +66,7 @@ briefctl todo edit ITEM_ID [--title TEXT] [--detail TEXT] [common mutation flags
 briefctl todo status ITEM_ID pending|in_progress|completed|cancelled
   [common mutation flags]
 briefctl todo note ITEM_ID TEXT [common mutation flags]
+briefctl todo note-edit ITEM_ID EVENT_ID TEXT [common mutation flags]
 briefctl todo delete ITEM_ID [common mutation flags]
 briefctl todo undo EVENT_ID [--actor human|agent|system] [--reason TEXT]
   [--idempotency-key KEY] [--expected-version VERSION]

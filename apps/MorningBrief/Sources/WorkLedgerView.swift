@@ -20,6 +20,10 @@ struct WorkLedgerView: View {
     @State private var cancelledExpanded = false
     @State private var pendingCancelItem: WorkItem?
     @State private var pendingDeleteItem: WorkItem?
+    @State private var editingProgressEventID: String?
+    @State private var editProgressText = ""
+    @State private var progressEditIdempotencyKey: String?
+    @State private var statusBucketsExpanded = false
     @FocusState private var captureFocused: Bool
 
     private var selectedItem: WorkItem? {
@@ -60,10 +64,23 @@ struct WorkLedgerView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: DS.Space.lg) {
-                    workSection("进行中", items: store.work?.inProgress ?? [])
-                    workSection("待处理", items: store.work?.pending ?? [])
-                    completedSection
-                    cancelledSection
+                    dayRiverSection
+                    activeStripSection
+                    if statusBucketsExpanded {
+                        workSection("进行中", items: store.work?.inProgress ?? [])
+                        workSection("待处理", items: store.work?.pending ?? [])
+                        completedSection
+                        cancelledSection
+                    } else {
+                        Button {
+                            statusBucketsExpanded = true
+                        } label: {
+                            Text("显示状态分组…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                     historyLink
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -132,6 +149,112 @@ struct WorkLedgerView: View {
             .keyboardShortcut("n", modifiers: .command)
             .accessibilityHidden(true)
         }
+    }
+
+    private var dayRiverSection: some View {
+        let entries = store.work?.dayTimeline ?? []
+        return VStack(alignment: .leading, spacing: DS.Space.xs) {
+            sectionLabel("今日动态", count: entries.count)
+            if entries.isEmpty {
+                Text("今天还没有节点；记下工作或追加进展后会出现在这里。")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.vertical, DS.Space.xs)
+            } else {
+                ForEach(entries) { entry in
+                    Button {
+                        selectedItemID = entry.item.id
+                    } label: {
+                        timelineRiverRow(entry)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var activeStripSection: some View {
+        let active = (store.work?.inProgress ?? []) + (store.work?.pending ?? [])
+        return VStack(alignment: .leading, spacing: DS.Space.xs) {
+            sectionLabel("仍在进行", count: active.count)
+            if active.isEmpty {
+                Text("没有进行中或待处理的任务")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(active) { item in
+                    Button {
+                        selectedItemID = item.id
+                    } label: {
+                        HStack(spacing: DS.Space.sm) {
+                            Circle()
+                                .fill(item.status.tint)
+                                .frame(width: 6, height: 6)
+                            Text(item.title)
+                                .font(.callout)
+                                .lineLimit(1)
+                            Spacer(minLength: DS.Space.xs)
+                            if let duration = item.wallClockDurationLabel {
+                                Text(duration)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func timelineRiverRow(_ entry: WorkTimelineEntry) -> some View {
+        let actor = switch entry.event.actor {
+        case "human": "你"
+        case "agent": "Agent"
+        default: "系统"
+        }
+        let time: String = {
+            guard let date = entry.event.occurredAtDate else { return "" }
+            return DateFormatter.workTime.string(from: date)
+        }()
+        return HStack(alignment: .top, spacing: DS.Space.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    if !time.isEmpty {
+                        Text(time)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(entry.item.title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(actor)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Text(entry.item.summary(for: entry.event))
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 4)
+        }
+        .padding(DS.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(DS.Palette.cardFill)
+        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+        .contentShape(Rectangle())
     }
 
     private func workSection(_ title: String, items: [WorkItem]) -> some View {
@@ -328,54 +451,72 @@ struct WorkLedgerView: View {
                     selectedItemID = nil
                 }
                 cancelEditing()
+                cancelProgressEditing()
             }
 
             if isEditingItem && !readOnly {
                 editForm(item)
             } else {
-                HStack {
-                    Text("任务记录")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    if readOnly {
-                        WorkStatusLabel(status: item.status)
-                    } else {
-                        Button {
-                            beginEditing(item)
-                        } label: {
-                            Label("编辑", systemImage: "pencil")
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(store.isWorkMutating)
-                        .accessibilityHint("修改任务标题和说明")
-
-                        // Non-destructive transitions only; cancel/delete use footer confirms.
-                        Menu {
-                            ForEach([WorkStatus.pending, .inProgress], id: \.self) { status in
-                                Button {
-                                    applyStatus(item, status)
-                                } label: {
-                                    Label(status.title, systemImage: status.iconName)
-                                }
+                VStack(alignment: .leading, spacing: DS.Space.xs) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(item.title)
+                            .font(.title3.weight(.semibold))
+                            .textSelection(.enabled)
+                        Spacer()
+                        if !readOnly {
+                            Button {
+                                beginEditing(item)
+                            } label: {
+                                Label("编辑", systemImage: "pencil")
                             }
-                        } label: {
-                            WorkStatusLabel(status: item.status, showsChevron: true)
+                            .buttonStyle(.borderless)
+                            .disabled(store.isWorkMutating)
+                            .accessibilityHint("修改任务标题和说明")
                         }
-                        .menuStyle(.borderlessButton)
-                        .fixedSize()
-                        .disabled(store.isWorkMutating)
-                        .accessibilityLabel("当前状态 \(item.status.title)，选择进行中或待处理")
+                    }
+                    if !item.detail.isEmpty {
+                        Text(item.detail)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    HStack(spacing: DS.Space.sm) {
+                        if readOnly {
+                            WorkStatusLabel(status: item.status)
+                        } else {
+                            Menu {
+                                ForEach([WorkStatus.pending, .inProgress], id: \.self) { status in
+                                    Button {
+                                        applyStatus(item, status)
+                                    } label: {
+                                        Label(status.title, systemImage: status.iconName)
+                                    }
+                                }
+                            } label: {
+                                WorkStatusLabel(status: item.status, showsChevron: true)
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
+                            .disabled(store.isWorkMutating)
+                        }
+                        if let duration = item.wallClockDurationLabel {
+                            Text(duration)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
             }
 
             ScrollView {
-                Text(selectableTranscript(item))
-                    .font(.callout)
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-                    .accessibilityLabel("任务标题、说明和全部进展")
+                VStack(alignment: .leading, spacing: DS.Space.sm) {
+                    Text("时间线")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(item.events.filter { $0.kind != "progress_edited" }) { event in
+                        taskTimelineNode(item, event: event, readOnly: readOnly)
+                    }
+                }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, DS.Space.sm)
             }
@@ -583,16 +724,106 @@ struct WorkLedgerView: View {
         }
     }
 
-    private func selectableTranscript(_ item: WorkItem) -> AttributedString {
-        let value = item.selectionTranscript { event in
+    @ViewBuilder
+    private func taskTimelineNode(
+        _ item: WorkItem,
+        event: WorkEvent,
+        readOnly: Bool
+    ) -> some View {
+        let actor = switch event.actor {
+        case "human": "你"
+        case "agent": "Agent"
+        default: "系统"
+        }
+        let time: String = {
             guard let date = event.occurredAtDate else { return "" }
             return DateFormatter.workTime.string(from: date)
+        }()
+        let reverted = item.isEventReverted(event)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                if !time.isEmpty {
+                    Text(time)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Text(actor)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if reverted {
+                    Text("已撤销")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                if !readOnly,
+                   !reverted,
+                   event.kind == "progress_added",
+                   editingProgressEventID != event.eventId {
+                    Button("编辑") {
+                        beginProgressEditing(event)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .disabled(store.isWorkMutating)
+                }
+            }
+            if editingProgressEventID == event.eventId, !readOnly {
+                TextField("进展正文", text: $editProgressText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(2...5)
+                HStack {
+                    Button("取消") { cancelProgressEditing() }
+                        .buttonStyle(.borderless)
+                    Spacer()
+                    Button("保存") { saveProgressEditing(item, event: event) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(
+                            store.isWorkMutating
+                                || editProgressText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                }
+            } else {
+                Text((reverted ? "[已撤销] " : "") + item.summary(for: event))
+                    .font(.callout)
+                    .foregroundStyle(reverted ? .secondary : .primary)
+                    .textSelection(.enabled)
+            }
         }
-        var transcript = AttributedString(value)
-        if let titleRange = transcript.range(of: item.title) {
-            transcript[titleRange].font = .title3.bold()
+        .padding(.vertical, 4)
+    }
+
+    private func beginProgressEditing(_ event: WorkEvent) {
+        if case .string(let text)? = event.payload["text"] {
+            editProgressText = text
+        } else {
+            editProgressText = ""
         }
-        return transcript
+        editingProgressEventID = event.eventId
+        progressEditIdempotencyKey = nil
+    }
+
+    private func cancelProgressEditing() {
+        editingProgressEventID = nil
+        editProgressText = ""
+        progressEditIdempotencyKey = nil
+    }
+
+    private func saveProgressEditing(_ item: WorkItem, event: WorkEvent) {
+        let text = editProgressText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let key = progressEditIdempotencyKey
+            ?? "ui:note-edit:\(item.id):\(event.eventId):\(UUID().uuidString)"
+        progressEditIdempotencyKey = key
+        store.editProgress(
+            itemID: item.id,
+            eventID: event.eventId,
+            text: text,
+            version: item.version,
+            idempotencyKey: key
+        ) {
+            cancelProgressEditing()
+        }
     }
 
     private func navigationTitle(_ backTitle: String, title: String, action: @escaping () -> Void) -> some View {
