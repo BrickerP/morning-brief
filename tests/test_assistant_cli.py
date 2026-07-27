@@ -153,8 +153,8 @@ def test_cli_sessions_lists_recent_parents(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     ids = [s["id"] for s in payload["sessions"]]
     assert ids == [
-        "22222222-2222-2222-2222-222222222222",
-        "11111111-1111-1111-1111-111111111111",
+        "claude:22222222-2222-2222-2222-222222222222",
+        "claude:11111111-1111-1111-1111-111111111111",
     ]
     assert payload["sessions"][0]["preview"] == "帮我排查支付回调"
     assert payload["sessions"][0]["summary"] is None

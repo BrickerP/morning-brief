@@ -335,9 +335,10 @@ def test_list_recent_sessions_orders_and_filters(tmp_path: Path) -> None:
     listing = list_recent_sessions(claude_projects_root=root)
     ids = [s["id"] for s in listing["sessions"]]
     assert ids == [
-        "22222222-2222-2222-2222-222222222222",
-        "11111111-1111-1111-1111-111111111111",
+        "claude:22222222-2222-2222-2222-222222222222",
+        "claude:11111111-1111-1111-1111-111111111111",
     ]
+    assert listing["sessions"][0]["source"] == "claude"
     assert listing["sessions"][0]["preview"] == "帮我排查支付回调"
     # Fallback preview prefers latest user text; summary-type records are not used.
     assert listing["sessions"][1]["preview"] == ""
@@ -346,7 +347,7 @@ def test_list_recent_sessions_orders_and_filters(tmp_path: Path) -> None:
 
     only_a = list_recent_sessions(project="-proj-a", claude_projects_root=root)
     assert [s["id"] for s in only_a["sessions"]] == [
-        "11111111-1111-1111-1111-111111111111"
+        "claude:11111111-1111-1111-1111-111111111111"
     ]
 
 
@@ -383,12 +384,13 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
     assert first["cached"] is False
     assert first["recipe_version"] == SUMMARY_RECIPE_VERSION
     assert first["summary"] == "第1次摘要：支付回调已修。"
-    cached_doc = json.loads((summaries / f"{session_id}.json").read_text(encoding="utf-8"))
+    cache_name = f"claude_{session_id}.json"
+    cached_doc = json.loads((summaries / cache_name).read_text(encoding="utf-8"))
     assert cached_doc["recipe_version"] == SUMMARY_RECIPE_VERSION
 
     # Old whole-session caches without recipe_version must not hit.
     cached_doc.pop("recipe_version")
-    (summaries / f"{session_id}.json").write_text(
+    (summaries / cache_name).write_text(
         json.dumps(cached_doc, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -428,15 +430,48 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
     assert ensured["sessions"][0]["summary_status"] == "ready"
     assert calls["n"] == 2
 
-    # Transcript change invalidates the fingerprint and allows one new summarize.
-    session_file.write_text(
-        json.dumps(
-            {"type": "user", "message": {"content": "追加：生产回归通过"}},
-            ensure_ascii=False,
+    # Tool/assistant noise that does not change the dialogue tail must NOT re-run.
+    with session_file.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {"type": "assistant", "message": {"content": "内部工具噪声，不进新 user turn"}},
+                ensure_ascii=False,
+            )
+            + "\n"
         )
-        + "\n",
-        encoding="utf-8",
+    noise = summarize_session(
+        session_file,
+        cfg=cfg,
+        claude_projects_root=root,
+        summaries_dir=summaries,
+        agent_workspace_dir=workspaces,
+        agent_runner=fake_agent,
     )
+    assert noise["cached"] is True
+    assert calls["n"] == 2
+
+    # A new user turn changes the exact fingerprint, but list/ensure keep the
+    # stale blurb (no auto re-agent). Explicit summarize_session still refreshes.
+    with session_file.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {"type": "user", "message": {"content": "追加：生产回归通过"}},
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+    ensured_stale = ensure_session_summaries(
+        limit=5,
+        cfg=cfg,
+        claude_projects_root=root,
+        summaries_dir=summaries,
+        agent_workspace_dir=workspaces,
+        agent_runner=fake_agent,
+    )
+    assert ensured_stale["summarized"] == 0
+    assert ensured_stale["sessions"][0]["summary_status"] == "ready"
+    assert calls["n"] == 2
+
     third = summarize_session(
         session_file,
         cfg=cfg,

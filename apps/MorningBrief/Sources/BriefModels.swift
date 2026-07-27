@@ -230,6 +230,7 @@ enum WorkStatus: String, Codable, CaseIterable, Identifiable {
     case pending
     case inProgress = "in_progress"
     case completed
+    /// Legacy decode only — cancelled writes are retired; use delete instead.
     case cancelled
 
     var id: String { rawValue }
@@ -250,6 +251,20 @@ enum WorkStatus: String, Codable, CaseIterable, Identifiable {
         case .completed: "checkmark.circle.fill"
         case .cancelled: "xmark.circle"
         }
+    }
+
+    /// Lower = earlier lane in the span chart (active work first).
+    var spanLanePriority: Int {
+        switch self {
+        case .inProgress: 0
+        case .pending: 1
+        case .completed: 2
+        case .cancelled: 3
+        }
+    }
+
+    static var chartFilterStatuses: [WorkStatus] {
+        [.inProgress, .pending, .completed]
     }
 }
 
@@ -445,7 +460,6 @@ struct WorkHistoryDay: Codable, Identifiable, Hashable {
 
     var id: String { date }
     var completed: [WorkItem] { items.filter { $0.status == .completed } }
-    var cancelled: [WorkItem] { items.filter { $0.status == .cancelled } }
 }
 
 struct LatestReversible: Codable, Hashable {
@@ -485,9 +499,6 @@ struct WorkDocument: Codable {
     var inProgress: [WorkItem] { items.filter { $0.status == .inProgress } }
     var completedToday: [WorkItem] {
         items.filter { $0.status == .completed && $0.terminalDate == date }
-    }
-    var cancelledToday: [WorkItem] {
-        items.filter { $0.status == .cancelled && $0.terminalDate == date }
     }
     var allItems: [WorkItem] {
         items + recentHistory.flatMap(\.items)
@@ -541,12 +552,179 @@ struct WorkDocument: Codable {
         }
         return entries.sorted { $0.event.sequence > $1.event.sequence }
     }
+
+    /// Active today + completed items from `recent_history`.
+    var chartSourceItems: [WorkItem] {
+        var seen = Set<String>()
+        var result: [WorkItem] = []
+        for item in items where item.status != .cancelled {
+            if seen.insert(item.id).inserted {
+                result.append(item)
+            }
+        }
+        for group in recentHistory {
+            for item in group.items where item.status != .cancelled {
+                if seen.insert(item.id).inserted {
+                    result.append(item)
+                }
+            }
+        }
+        return result
+    }
+
+    /// Per-task colored spans for the 2D chart (Y = calendar days, X = lanes).
+    /// Includes recent completed work from history so they stay visible on the chart.
+    func daySpans(now: Date = Date()) -> [WorkDaySpan] {
+        let viewDay = date
+        var drafts: [(item: WorkItem, startDay: String, endDay: String, isOpen: Bool)] = []
+        for item in chartSourceItems {
+            guard item.belongsOnSpanChart(viewDay: viewDay) else { continue }
+            guard let created = item.createdAtDate else { continue }
+            let startDay = BriefPaths.dayString(for: created)
+            let isOpen = item.status == .pending || item.status == .inProgress
+            let rawEnd: String
+            if isOpen {
+                rawEnd = viewDay
+            } else if let terminal = item.terminalDate {
+                rawEnd = terminal
+            } else if let last = item.lastEventDate {
+                rawEnd = BriefPaths.dayString(for: last)
+            } else {
+                rawEnd = startDay
+            }
+            // Clip to the viewed day so we don't paint into the future.
+            let endDay = min(rawEnd, viewDay)
+            let clampedStart = min(startDay, endDay)
+            drafts.append((item, clampedStart, endDay, isOpen))
+        }
+        guard !drafts.isEmpty else { return [] }
+
+        let rangeEndDay = viewDay
+        let rangeStartDay = drafts.map(\.startDay).min() ?? viewDay
+
+        let ordered = drafts.sorted {
+            let p0 = $0.item.status.spanLanePriority
+            let p1 = $1.item.status.spanLanePriority
+            if p0 != p1 { return p0 < p1 }
+            if $0.startDay != $1.startDay { return $0.startDay < $1.startDay }
+            if $0.endDay != $1.endDay { return $0.endDay > $1.endDay }
+            return $0.item.title.localizedStandardCompare($1.item.title) == .orderedAscending
+        }
+        return ordered.enumerated().map { index, draft in
+            WorkDaySpan(
+                id: draft.item.id,
+                item: draft.item,
+                startDay: draft.startDay,
+                endDay: draft.endDay,
+                rangeStartDay: rangeStartDay,
+                rangeEndDay: rangeEndDay,
+                isOpen: draft.isOpen,
+                laneIndex: index
+            )
+        }
+    }
+
+    /// Per-day active span counts for a contribution-style calendar ending at `endDay`.
+    func spanActivityCounts(endingAt endDay: String, weeks: Int = 13) -> [String: Int] {
+        guard weeks > 0,
+              let windowStart = BriefPaths.dayString(byAddingDays: -(weeks * 7 - 1), to: endDay)
+        else { return [:] }
+
+        var counts: [String: Int] = [:]
+        for day in BriefPaths.dayStrings(from: windowStart, through: endDay) {
+            counts[day] = 0
+        }
+
+        for item in chartSourceItems {
+            guard let created = item.createdAtDate else { continue }
+            let itemStart = BriefPaths.dayString(for: created)
+            let isOpen = item.status == .pending || item.status == .inProgress
+            let itemEnd: String
+            if isOpen {
+                itemEnd = endDay
+            } else if let terminal = item.terminalDate {
+                itemEnd = terminal
+            } else if let last = item.lastEventDate {
+                itemEnd = BriefPaths.dayString(for: last)
+            } else {
+                itemEnd = itemStart
+            }
+            let clippedStart = max(itemStart, windowStart)
+            let clippedEnd = min(itemEnd, endDay)
+            guard clippedStart <= clippedEnd else { continue }
+            for day in BriefPaths.dayStrings(from: clippedStart, through: clippedEnd) {
+                counts[day, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
 }
 
 struct WorkTimelineEntry: Identifiable, Hashable {
     let id: String
     let event: WorkEvent
     let item: WorkItem
+}
+
+/// One task's continuous span across calendar days (not clock hours, not event nodes).
+struct WorkDaySpan: Identifiable, Hashable {
+    let id: String
+    let item: WorkItem
+    /// Inclusive `yyyy-MM-dd` start of the task's life (created day).
+    let startDay: String
+    /// Inclusive `yyyy-MM-dd` end (terminal day, or viewed day if still open).
+    let endDay: String
+    /// Shared chart window (top → bottom).
+    let rangeStartDay: String
+    let rangeEndDay: String
+    let isOpen: Bool
+    var laneIndex: Int = 0
+
+    /// Inclusive day count of this task's span (before chart clipping).
+    var spanDayCount: Int {
+        max(1, (BriefPaths.dayOffset(from: startDay, to: endDay) ?? 0) + 1)
+    }
+
+    /// Day keys drawn on the Y axis, oldest at top.
+    var chartDays: [String] {
+        BriefPaths.dayStrings(from: rangeStartDay, through: rangeEndDay)
+    }
+
+    /// Vertical layout in day rows: top = older dates, bottom = viewed day.
+    func yRange(in chartHeight: Double) -> (y: Double, height: Double) {
+        let days = chartDays
+        guard !days.isEmpty, chartHeight > 0 else { return (0, chartHeight) }
+        let row = chartHeight / Double(days.count)
+        let startIdx = days.firstIndex(of: max(startDay, rangeStartDay)) ?? 0
+        let endIdx = days.firstIndex(of: min(endDay, rangeEndDay)) ?? (days.count - 1)
+        let lo = min(startIdx, endIdx)
+        let hi = max(startIdx, endIdx)
+        return (Double(lo) * row, max(row, Double(hi - lo + 1) * row))
+    }
+}
+
+extension WorkItem {
+    func belongsOnDayChart(day: String) -> Bool {
+        if status == .pending || status == .inProgress { return true }
+        if terminalDate == day { return true }
+        return events.contains { event in
+            guard !isEventReverted(event) else { return false }
+            guard let occurred = event.occurredAtDate else { return false }
+            return BriefPaths.dayString(for: occurred) == day
+        }
+    }
+
+    /// Span chart includes active work plus completed items already in the projection.
+    func belongsOnSpanChart(viewDay: String) -> Bool {
+        if status == .cancelled { return false }
+        if status == .pending || status == .inProgress { return true }
+        if status == .completed {
+            if let terminalDate, terminalDate <= viewDay { return true }
+            return belongsOnDayChart(day: viewDay)
+        }
+        return belongsOnDayChart(day: viewDay)
+    }
 }
 
 struct ClaudeSessionMatch: Codable, Hashable {
@@ -679,9 +857,12 @@ struct SessionApplyResult: Codable {
     }
 }
 
-/// One recent Claude session for the pick-without-paste list on the Agent lens.
+/// One recent session (Claude / Codex / Cursor) for the Agent picker.
 struct RecentSession: Codable, Identifiable, Hashable {
+    /// Composite id: ``claude:<uuid>`` / ``codex:<uuid>`` / ``cursor:<uuid>``.
     let id: String
+    /// `claude` | `codex` | `cursor`
+    let source: String
     let project: String
     let sourceFile: String
     let modifiedAt: String
@@ -694,12 +875,57 @@ struct RecentSession: Codable, Identifiable, Hashable {
     let summaryStatus: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, project, preview, summary
+        case id, source, project, preview, summary
         case sourceFile = "source_file"
         case modifiedAt = "modified_at"
         case subagentCount = "subagent_count"
         case summaryStatus = "summary_status"
     }
+
+    init(
+        id: String,
+        source: String = "claude",
+        project: String,
+        sourceFile: String,
+        modifiedAt: String,
+        subagentCount: Int,
+        preview: String,
+        summary: String?,
+        summaryStatus: String?
+    ) {
+        self.id = id
+        self.source = source
+        self.project = project
+        self.sourceFile = sourceFile
+        self.modifiedAt = modifiedAt
+        self.subagentCount = subagentCount
+        self.preview = preview
+        self.summary = summary
+        self.summaryStatus = summaryStatus
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        source = try container.decodeIfPresent(String.self, forKey: .source) ?? "claude"
+        project = try container.decode(String.self, forKey: .project)
+        sourceFile = try container.decode(String.self, forKey: .sourceFile)
+        modifiedAt = try container.decode(String.self, forKey: .modifiedAt)
+        subagentCount = try container.decode(Int.self, forKey: .subagentCount)
+        preview = try container.decode(String.self, forKey: .preview)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        summaryStatus = try container.decodeIfPresent(String.self, forKey: .summaryStatus)
+    }
+
+    var sourceTitle: String {
+        switch source {
+        case "codex": "Codex"
+        case "cursor": "Cursor"
+        default: "Claude"
+        }
+    }
+
+    var supportsAnalyze: Bool { source == "claude" }
 
     var modifiedAtDate: Date? {
         BriefDateParser.iso8601Fractional.date(from: modifiedAt)
@@ -749,6 +975,60 @@ enum BriefPaths {
     /// `yyyy-MM-dd` day key for the given date in `dayTimeZone`.
     static func dayString(for date: Date = Date()) -> String {
         dayFormatter.string(from: date)
+    }
+
+    static func startOfDay(forDateString value: String) -> Date? {
+        guard let day = dayFormatter.date(from: value) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = dayTimeZone
+        return calendar.startOfDay(for: day)
+    }
+
+    static func endOfDay(forDateString value: String) -> Date? {
+        guard let start = startOfDay(forDateString: value) else { return nil }
+        return start.addingTimeInterval(24 * 60 * 60 - 1)
+    }
+
+    /// `yyyy-MM-dd` by adding whole days in `dayTimeZone`.
+    static func dayString(byAddingDays days: Int, to value: String) -> String? {
+        guard let start = startOfDay(forDateString: value) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = dayTimeZone
+        guard let shifted = calendar.date(byAdding: .day, value: days, to: start) else {
+            return nil
+        }
+        return dayString(for: shifted)
+    }
+
+    /// Whole-day offset from `from` to `to` (`to - from`). Nil if either key is invalid.
+    static func dayOffset(from: String, to: String) -> Int? {
+        guard let a = startOfDay(forDateString: from),
+              let b = startOfDay(forDateString: to) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = dayTimeZone
+        return calendar.dateComponents([.day], from: a, to: b).day
+    }
+
+    /// Inclusive day keys from `from` through `through` (ascending).
+    static func dayStrings(from: String, through: String) -> [String] {
+        guard from <= through,
+              let start = startOfDay(forDateString: from),
+              startOfDay(forDateString: through) != nil else { return [] }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = dayTimeZone
+        var days: [String] = []
+        var cursor = start
+        let endKey = through
+        while true {
+            let key = dayString(for: cursor)
+            days.append(key)
+            if key >= endKey { break }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+            // Safety cap for pathological spans; UI scrolls within this window.
+            if days.count > 366 { break }
+        }
+        return days
     }
 
     /// Today's day key (in `dayTimeZone`).

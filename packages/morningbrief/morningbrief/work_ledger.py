@@ -15,10 +15,13 @@ from morningbrief.paths import BRIEFS_DIR, WORK_LEDGER_DB
 from morningbrief.validate import validate_work_ledger_snapshot
 
 Actor = Literal["human", "agent", "system"]
-WorkStatus = Literal["pending", "in_progress", "completed", "cancelled"]
+WorkStatus = Literal["pending", "in_progress", "completed"]
+# Legacy status may still exist on the event rail; never accept new writes.
+_LEGACY_STATUSES = {"cancelled"}
 
 ACTORS = {"human", "agent", "system"}
-STATUSES = {"pending", "in_progress", "completed", "cancelled"}
+STATUSES = {"pending", "in_progress", "completed"}
+WRITABLE_STATUSES = STATUSES
 MUTATION_KINDS = {
     "created",
     "edited",
@@ -241,10 +244,11 @@ class WorkLedger:
             if event["kind"] != "status_changed" or event["event_id"] in reverted:
                 continue
             status = event["payload"]["status"]
-            terminal_day = self._local_day(event["occurred_at"]) if status in {
-                "completed",
-                "cancelled",
-            } else None
+            terminal_day = (
+                self._local_day(event["occurred_at"])
+                if status in {"completed"} | _LEGACY_STATUSES
+                else None
+            )
         return terminal_day
 
     def _public_item(self, item: dict[str, Any]) -> dict[str, Any]:
@@ -288,6 +292,9 @@ class WorkLedger:
         for item in items.values():
             if item.get("tombstoned"):
                 continue
+            # Cancelled is retired: hide from projections (use delete/tombstone).
+            if item["status"] in _LEGACY_STATUSES:
+                continue
             public_item = self._public_item(item)
             if (
                 item["status"] in {"pending", "in_progress"}
@@ -308,11 +315,10 @@ class WorkLedger:
             for item in day_items.values():
                 if item.get("tombstoned"):
                     continue
+                if item["status"] in _LEGACY_STATUSES:
+                    continue
                 terminal_day = self._terminal_day(item)
-                if (
-                    item["status"] in {"completed", "cancelled"}
-                    and terminal_day == history_day
-                ):
+                if item["status"] == "completed" and terminal_day == history_day:
                     terminal_items.append(self._public_item(item))
             if terminal_items:
                 terminal_items.sort(
@@ -571,12 +577,23 @@ class WorkLedger:
     def set_status(
         self,
         item_id: str,
-        status: WorkStatus,
+        status: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        if status not in STATUSES:
-            raise LedgerError(f"status must be one of: {', '.join(sorted(STATUSES))}")
-        return self._append(item_id=item_id, kind="status_changed", payload={"status": status}, **kwargs)
+        if status in _LEGACY_STATUSES:
+            raise LedgerError(
+                "cancelled is retired; delete the item instead of cancelling"
+            )
+        if status not in WRITABLE_STATUSES:
+            raise LedgerError(
+                f"status must be one of: {', '.join(sorted(WRITABLE_STATUSES))}"
+            )
+        return self._append(
+            item_id=item_id,
+            kind="status_changed",
+            payload={"status": status},
+            **kwargs,
+        )
 
     def add_progress(self, item_id: str, text: str, **kwargs: Any) -> dict[str, Any]:
         clean_text = text.strip()
@@ -620,9 +637,9 @@ class WorkLedger:
             # Let _append handle idempotent duplicate via idempotency_key; otherwise conflict.
             if not kwargs.get("idempotency_key"):
                 raise ConflictError(f"work item already tombstoned: {item_id}")
-        elif current["status"] not in {"pending", "in_progress"}:
+        elif current["status"] not in {"pending", "in_progress"} | _LEGACY_STATUSES:
             raise LedgerError(
-                "delete is only allowed for pending or in_progress items"
+                "delete is only allowed for pending, in_progress, or legacy cancelled items"
             )
         return self._append(
             item_id=item_id, kind="tombstoned", payload={}, **kwargs

@@ -1,6 +1,6 @@
 ---
 name: todo
-description: Manage the local Morning Brief daily work ledger when the user asks to record, review, edit, progress, complete, cancel, undo, inspect Todo history, or recover a Claude session from pasted ending text and confirm its proposed Todo updates.
+description: Manage the local Morning Brief daily work ledger when the user asks to record, review, edit, progress, complete, delete, undo, inspect Todo history, or recover a Claude session from pasted ending text and confirm its proposed Todo updates.
 ---
 
 # Todo
@@ -13,7 +13,7 @@ must be installed before continuing.
 ## Operating contract
 
 1. Start with `briefctl todo view` for today's work, or `briefctl todo history
-   --days N` when the request concerns recent completed or cancelled work.
+   --days N` when the request concerns recent completed work.
 2. Before changing an existing item, read its current `version`.
 3. Use the CLI only. Never edit SQLite or `work.json` directly.
 4. The Agent has authority to choose the resulting state from the available
@@ -43,13 +43,16 @@ Use exactly these statuses:
 - `pending`: accepted but not started
 - `in_progress`: actively being worked; append intermediate notes as work moves
 - `completed`: finished and retained in history
-- `cancelled`: intentionally stopped and retained in history
+
+There is **no** `cancelled` status. Lifecycle is:
+
+- **新增** → `todo add`
+- **编辑** → `todo edit` / `todo note` / `todo status` (modify) **or** `todo delete` (remove from views)
 
 `todo delete` is not a status. It appends a `tombstoned` event that hides the
 item from published projections (`items` / recent history) while keeping the
 event rail append-only and undoable. Only `pending` and `in_progress` items may
-be deleted. Prefer `cancelled` when the stop itself is a meaningful outcome the
-user should still see in history.
+be deleted (plus legacy cancelled rows during retirement).
 
 Do not mark an item completed merely because one sub-step finished. Add a note
 for partial results and leave it in progress when follow-up remains.
@@ -63,7 +66,7 @@ briefctl todo add TITLE [--detail TEXT] [--actor human|agent|system]
   [--reason TEXT] [--evidence VALUE]... [--item-id ID]
   [--idempotency-key KEY]
 briefctl todo edit ITEM_ID [--title TEXT] [--detail TEXT] [common mutation flags]
-briefctl todo status ITEM_ID pending|in_progress|completed|cancelled
+briefctl todo status ITEM_ID pending|in_progress|completed
   [common mutation flags]
 briefctl todo note ITEM_ID TEXT [common mutation flags]
 briefctl todo note-edit ITEM_ID EVENT_ID TEXT [common mutation flags]
@@ -119,48 +122,23 @@ Append progress without losing earlier context:
 ```bash
 briefctl todo note "$ITEM_ID" "已完成加油包链路，Pro 支付仍需回归" \
   --actor agent \
-  --reason "Record intermediate result and remaining follow-up" \
-  --expected-version "$VERSION"
+  --reason "Partial progress from session"
 ```
 
-Update status from external evidence:
+Finish work:
 
 ```bash
-briefctl todo status "$ITEM_ID" in_progress \
+briefctl todo status "$ITEM_ID" completed \
+  --expected-version "$VERSION" \
   --actor agent \
-  --reason "API response shows an unresolved callback failure" \
-  --evidence "api:callbacks/request-142" \
-  --evidence "meeting:2026-07-23/payment-review" \
-  --idempotency-key "callbacks-142-start-v1" \
-  --expected-version 1
+  --reason "Acceptance criteria met"
 ```
 
-If evidence conflicts, append the new evidence and reasoning, then make the
-status or detail change the Agent judges appropriate. The event rail preserves
-all records and supports undo.
+Remove a mistaken or abandoned item (not a status — hide via tombstone):
 
-## Claude session recovery
-
-When the user pastes the ending of a Claude terminal session:
-
-1. Save the pasted text to a private temporary UTF-8 file.
-2. Optionally run `briefctl assistant locate --input FILE` first to confirm the
-   matched session cheaply (seconds, no agent read) before the full analysis.
-3. Run `briefctl assistant analyze --input FILE` (locate + full read). To analyze
-   a session the user picked directly — e.g. from `briefctl assistant sessions`
-   — skip locating with `briefctl assistant analyze --session-file PARENT_JSONL`.
-4. Present the returned `summary`, matched session ID, `todo_matches`, and every
-   proposed mutation. Do not reinterpret an analysis result as already applied.
-5. After explicit confirmation, run `briefctl assistant apply ANALYSIS_ID`.
-6. Report the applied event IDs and resulting Todo states. If a version
-   conflict occurs, re-run the analysis against the current ledger rather than
-   forcing the old proposal.
-
-`assistant sessions` lists recent parent sessions (newest first, with a short
-preview) for pick-without-paste. `--session-file` must be a top-level
-`<project>/<id>.jsonl` under `~/.claude/projects`; subagent transcripts and
-out-of-tree paths are rejected.
-
-The analyzer searches Claude project JSONL by distinctive ending fragments,
-verifies the parent session, includes all discovered subagent JSONL files, and
-uses the same configured Agent CLI as Morning Brief synthesis.
+```bash
+briefctl todo delete "$ITEM_ID" \
+  --expected-version "$VERSION" \
+  --actor human \
+  --reason "No longer needed"
+```

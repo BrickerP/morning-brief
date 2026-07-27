@@ -10,7 +10,7 @@ from pathlib import Path
 import morningbrief.work_ledger as work_ledger_module
 import morningbrief.validate as validate_module
 from morningbrief.validate import ValidationError
-from morningbrief.work_ledger import ConflictError, WorkLedger
+from morningbrief.work_ledger import ConflictError, LedgerError, WorkLedger
 
 
 def at(day: int, hour: int) -> datetime:
@@ -117,25 +117,69 @@ def test_projection_as_of_day_and_active_work_carries_forward(tmp_path: Path) ->
     assert day_23["items"][0]["status"] == "completed"
 
 
-def test_recent_history_groups_terminal_date_and_includes_cancelled(tmp_path: Path) -> None:
+def test_recent_history_groups_completed_by_terminal_date(tmp_path: Path) -> None:
     ledger = make_ledger(tmp_path)
     ledger.add("完成项", item_id="done", occurred_at=at(21, 7))
     ledger.set_status(
         "done", "completed", actor="human", reason=None, evidence=[],
         idempotency_key=None, expected_version=None, occurred_at=at(22, 7),
     )
-    ledger.add("取消项", item_id="nope", occurred_at=at(22, 8))
-    ledger.set_status(
-        "nope", "cancelled", actor="agent", reason="不再需要", evidence=[],
-        idempotency_key=None, expected_version=None, occurred_at=at(23, 8),
-    )
+    ledger.add("仍在进行", item_id="open", occurred_at=at(22, 8))
 
     history = ledger.history("2026-07-23", days=2)
-    assert [group["date"] for group in history["recent_history"]] == [
-        "2026-07-23",
-        "2026-07-22",
-    ]
-    assert history["recent_history"][0]["items"][0]["status"] == "cancelled"
+    assert [group["date"] for group in history["recent_history"]] == ["2026-07-22"]
+    assert history["recent_history"][0]["items"][0]["status"] == "completed"
+    assert history["recent_history"][0]["items"][0]["id"] == "done"
+
+
+def test_cancelled_status_is_rejected_and_legacy_hidden(tmp_path: Path) -> None:
+    ledger = make_ledger(tmp_path)
+    ledger.add("旧取消项", item_id="nope", occurred_at=at(22, 8))
+    try:
+        ledger.set_status(
+            "nope",
+            "cancelled",
+            actor="agent",
+            reason="不再需要",
+            evidence=[],
+            idempotency_key=None,
+            expected_version=None,
+            occurred_at=at(23, 8),
+        )
+        raise AssertionError("set_status(cancelled) should raise")
+    except LedgerError as exc:
+        assert "retired" in str(exc)
+
+    # Legacy rail may still carry cancelled; projections must hide it.
+    ledger._append(
+        item_id="nope",
+        kind="status_changed",
+        actor="agent",
+        payload={"status": "cancelled"},
+        reason="legacy cancel",
+        evidence=[],
+        idempotency_key=None,
+        expected_version=1,
+        occurred_at=at(23, 8),
+    )
+    hidden = ledger.view("2026-07-23", publish=False)
+    assert all(item["id"] != "nope" for item in hidden["items"])
+    assert all(
+        item["id"] != "nope"
+        for group in hidden["recent_history"]
+        for item in group["items"]
+    )
+
+    deleted = ledger.delete(
+        "nope",
+        actor="human",
+        reason="retire cancelled probe",
+        evidence=[],
+        idempotency_key=None,
+        expected_version=2,
+        occurred_at=at(23, 9),
+    )
+    assert any(e["kind"] == "tombstoned" for e in deleted["item"]["events"])
 
 
 def test_undo_is_append_only_and_restores_prior_state(tmp_path: Path) -> None:
@@ -479,7 +523,7 @@ def test_delete_rejects_terminal_status_and_non_revert_after_tombstone(
             expected_version=2,
         )
     except work_ledger_module.LedgerError as error:
-        assert "pending or in_progress" in str(error)
+        assert "pending, in_progress" in str(error) or "only allowed" in str(error)
     else:
         raise AssertionError("completed items must not be deleteable")
 

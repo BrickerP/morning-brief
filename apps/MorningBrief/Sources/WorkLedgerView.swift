@@ -14,16 +14,10 @@ struct WorkLedgerView: View {
     @State private var editIdempotencyKey: String?
     @State private var editIdempotencyItemID: String?
     @State private var selectedItemID: String?
-    @State private var archivedItem: WorkItem?
-    @State private var showingHistory = false
-    @State private var completedExpanded = false
-    @State private var cancelledExpanded = false
-    @State private var pendingCancelItem: WorkItem?
     @State private var pendingDeleteItem: WorkItem?
     @State private var editingProgressEventID: String?
     @State private var editProgressText = ""
     @State private var progressEditIdempotencyKey: String?
-    @State private var statusBucketsExpanded = false
     @FocusState private var captureFocused: Bool
 
     private var selectedItem: WorkItem? {
@@ -33,12 +27,11 @@ struct WorkLedgerView: View {
 
     var body: some View {
         Group {
-            if showingHistory {
-                historyView
-            } else if let item = archivedItem {
-                detailView(item, readOnly: true)
-            } else if let item = selectedItem {
-                detailView(item, readOnly: store.work?.readOnly ?? !store.isViewingToday)
+            if let item = selectedItem {
+                // Items only present in recent_history (not today's active list) are read-only.
+                let inTodayItems = store.work?.items.contains { $0.id == item.id } ?? false
+                let readOnly = (store.work?.readOnly ?? !store.isViewingToday) || !inTodayItems
+                detailView(item, readOnly: readOnly)
             } else {
                 overview
             }
@@ -46,70 +39,22 @@ struct WorkLedgerView: View {
     }
 
     private var overview: some View {
-        VStack(alignment: .leading, spacing: DS.Space.md) {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
             if store.isViewingToday {
-                TextField("记下一件刚发生的工作…", text: $captureText)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($captureFocused)
-                    .onSubmit(capture)
-                    .disabled(store.isWorkMutating)
-                    .accessibilityLabel("快速记录工作")
-                    .accessibilityHint("输入工作标题并按回车保存")
-                    .onChange(of: captureText) {
-                        if !store.isWorkMutating {
-                            captureIdempotencyKey = nil
-                        }
-                    }
+                captureComposer
             }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: DS.Space.lg) {
-                    dayRiverSection
-                    activeStripSection
-                    if statusBucketsExpanded {
-                        workSection("进行中", items: store.work?.inProgress ?? [])
-                        workSection("待处理", items: store.work?.pending ?? [])
-                        completedSection
-                        cancelledSection
-                    } else {
-                        Button {
-                            statusBucketsExpanded = true
-                        } label: {
-                            Text("显示状态分组…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    historyLink
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, DS.Space.sm)
+            WorkDaySpanChart(spans: store.work?.daySpans() ?? []) { item in
+                selectedItemID = item.id
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider()
-            workFooter
+            if store.isViewingToday, store.work?.latestReversibleEvent != nil {
+                Divider()
+                workFooter
+            }
         }
         .background(captureShortcut)
-        .confirmationDialog(
-            "取消这个任务？",
-            isPresented: isCancelConfirmPresented,
-            titleVisibility: .visible
-        ) {
-            if let item = pendingCancelItem {
-                Button("取消任务") {
-                    applyStatus(item, .cancelled)
-                    pendingCancelItem = nil
-                }
-                Button("返回", role: .cancel) {
-                    pendingCancelItem = nil
-                }
-            }
-        } message: {
-            if let item = pendingCancelItem {
-                Text("「\(item.title)」会移出进行中/待处理，记录保留在最近 7 天。")
-            }
-        }
         .confirmationDialog(
             "删除这个任务？",
             isPresented: isDeleteConfirmPresented,
@@ -126,13 +71,59 @@ struct WorkLedgerView: View {
             }
         } message: {
             if let item = pendingDeleteItem {
-                Text("「\(item.title)」会从台账视图中移除；事件仍保留且可撤销，不会出现在最近记录里。")
+                Text("「\(item.title)」会从台账视图中移除；事件仍保留且可撤销。")
             }
         }
         .onAppear {
             if store.isViewingToday, !(store.work?.readOnly ?? false) {
                 captureFocused = true
             }
+        }
+    }
+
+    private var canSubmitCapture: Bool {
+        !captureText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !store.isWorkMutating
+    }
+
+    /// Compact chat-style composer for quick work capture (⌘N to focus).
+    private var captureComposer: some View {
+        HStack(alignment: .center, spacing: DS.Space.sm) {
+            TextField("", text: $captureText)
+                .textFieldStyle(.plain)
+                .focused($captureFocused)
+                .onSubmit(capture)
+                .disabled(store.isWorkMutating)
+                .accessibilityLabel("快速记录工作")
+                .accessibilityHint("输入标题后回车或点发送")
+                .onChange(of: captureText) {
+                    if !store.isWorkMutating {
+                        captureIdempotencyKey = nil
+                    }
+                }
+
+            Button(action: capture) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.title3)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(canSubmitCapture ? Color.accentColor : Color.secondary.opacity(0.35))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSubmitCapture)
+            .accessibilityLabel("发送")
+        }
+        .padding(.horizontal, DS.Space.md)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                .fill(DS.Palette.cardFill)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
+                .strokeBorder(
+                    captureFocused ? Color.accentColor.opacity(0.45) : DS.Palette.cardStroke,
+                    lineWidth: 1
+                )
         }
     }
 
@@ -151,203 +142,6 @@ struct WorkLedgerView: View {
         }
     }
 
-    private var dayRiverSection: some View {
-        let entries = store.work?.dayTimeline ?? []
-        return VStack(alignment: .leading, spacing: DS.Space.xs) {
-            sectionLabel("今日动态", count: entries.count)
-            if entries.isEmpty {
-                Text("今天还没有节点；记下工作或追加进展后会出现在这里。")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.vertical, DS.Space.xs)
-            } else {
-                ForEach(entries) { entry in
-                    Button {
-                        selectedItemID = entry.item.id
-                    } label: {
-                        timelineRiverRow(entry)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private var activeStripSection: some View {
-        let active = (store.work?.inProgress ?? []) + (store.work?.pending ?? [])
-        return VStack(alignment: .leading, spacing: DS.Space.xs) {
-            sectionLabel("仍在进行", count: active.count)
-            if active.isEmpty {
-                Text("没有进行中或待处理的任务")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            } else {
-                ForEach(active) { item in
-                    Button {
-                        selectedItemID = item.id
-                    } label: {
-                        HStack(spacing: DS.Space.sm) {
-                            Circle()
-                                .fill(item.status.tint)
-                                .frame(width: 6, height: 6)
-                            Text(item.title)
-                                .font(.callout)
-                                .lineLimit(1)
-                            Spacer(minLength: DS.Space.xs)
-                            if let duration = item.wallClockDurationLabel {
-                                Text(duration)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .lineLimit(1)
-                            }
-                            Image(systemName: "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private func timelineRiverRow(_ entry: WorkTimelineEntry) -> some View {
-        let actor = switch entry.event.actor {
-        case "human": "你"
-        case "agent": "Agent"
-        default: "系统"
-        }
-        let time: String = {
-            guard let date = entry.event.occurredAtDate else { return "" }
-            return DateFormatter.workTime.string(from: date)
-        }()
-        return HStack(alignment: .top, spacing: DS.Space.sm) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    if !time.isEmpty {
-                        Text(time)
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(entry.item.title)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                    Text(actor)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                Text(entry.item.summary(for: entry.event))
-                    .font(.callout)
-                    .foregroundStyle(.primary)
-                    .multilineTextAlignment(.leading)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .padding(.top, 4)
-        }
-        .padding(DS.Space.sm)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(DS.Palette.cardFill)
-        .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
-        .contentShape(Rectangle())
-    }
-
-    private func workSection(_ title: String, items: [WorkItem]) -> some View {
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
-            sectionLabel(title, count: items.count)
-            if items.isEmpty {
-                Text(title == "进行中" ? "暂无进行中的工作" : "待办已经清空")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.vertical, DS.Space.xs)
-            } else {
-                ForEach(items) { item in
-                    WorkItemRow(item: item) {
-                        selectedItemID = item.id
-                    } onCancel: {
-                        pendingCancelItem = item
-                    } onComplete: {
-                        applyStatus(item, .completed)
-                    } onDelete: {
-                        pendingDeleteItem = item
-                    }
-                }
-            }
-        }
-    }
-
-    private var completedSection: some View {
-        let completed = store.work?.completedToday ?? []
-        return VStack(alignment: .leading, spacing: DS.Space.xs) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    completedExpanded.toggle()
-                }
-            } label: {
-                HStack {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .rotationEffect(.degrees(completedExpanded ? 90 : 0))
-                    sectionLabel("今日完成", count: completed.count)
-                    Spacer()
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(completedExpanded ? "收起今日完成" : "展开今日完成")
-
-            if completedExpanded {
-                ForEach(completed) { item in
-                    WorkItemRow(item: item) {
-                        selectedItemID = item.id
-                    }
-                }
-            }
-        }
-    }
-
-    private var cancelledSection: some View {
-        let cancelled = store.work?.cancelledToday ?? []
-        return VStack(alignment: .leading, spacing: DS.Space.xs) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    cancelledExpanded.toggle()
-                }
-            } label: {
-                HStack {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .rotationEffect(.degrees(cancelledExpanded ? 90 : 0))
-                    sectionLabel("今日取消", count: cancelled.count)
-                    Spacer()
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(cancelledExpanded ? "收起今日取消" : "展开今日取消")
-
-            if cancelledExpanded {
-                ForEach(cancelled) { item in
-                    WorkItemRow(item: item) {
-                        selectedItemID = item.id
-                    }
-                }
-            }
-        }
-    }
-
-    private var isCancelConfirmPresented: Binding<Bool> {
-        Binding(
-            get: { pendingCancelItem != nil },
-            set: { if !$0 { pendingCancelItem = nil } }
-        )
-    }
-
     private var isDeleteConfirmPresented: Binding<Bool> {
         Binding(
             get: { pendingDeleteItem != nil },
@@ -355,41 +149,10 @@ struct WorkLedgerView: View {
         )
     }
 
-    private var historyLink: some View {
-        Button {
-            showingHistory = true
-        } label: {
-            HStack {
-                Spacer()
-                Text("最近 7 天记录")
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-            }
-            .font(.subheadline)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("查看最近七天工作记录")
-    }
-
     private var workFooter: some View {
-        HStack(spacing: DS.Space.sm) {
-            if let event = store.work?.latestAgentEvent {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Agent 最近更新")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text(event.summary)
-                        .font(.caption)
-                        .lineLimit(1)
-                }
-            } else {
-                Text("暂无 Agent 更新")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+        HStack {
             Spacer()
-            if let event = store.work?.latestReversibleEvent, store.isViewingToday {
+            if let event = store.work?.latestReversibleEvent {
                 Button("撤销上次更新") {
                     store.undo(eventID: event.eventId)
                 }
@@ -400,39 +163,7 @@ struct WorkLedgerView: View {
         }
     }
 
-    private var historyView: some View {
-        VStack(alignment: .leading, spacing: DS.Space.md) {
-            navigationTitle("今日工作", title: "最近 7 天") {
-                showingHistory = false
-            }
-            ScrollView {
-                VStack(alignment: .leading, spacing: DS.Space.lg) {
-                    ForEach(store.work?.recentHistory ?? []) { day in
-                        VStack(alignment: .leading, spacing: DS.Space.xs) {
-                            HStack {
-                                Text(displayDate(day.date))
-                                    .font(.subheadline.weight(.semibold))
-                                Spacer()
-                                Text("完成 \(day.completed.count)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            ForEach(day.items) { item in
-                                WorkItemRow(item: item) {
-                                    archivedItem = item
-                                }
-                            }
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, DS.Space.sm)
-            }
-        }
-        .background(backShortcut { showingHistory = false })
-    }
-
-    /// Hidden Esc shortcut that runs a back action (detail/history dismissal).
+    /// Hidden Esc shortcut that runs a back action (detail dismissal).
     private func backShortcut(_ action: @escaping () -> Void) -> some View {
         Button(action: action) { EmptyView() }
             .buttonStyle(.plain)
@@ -444,12 +175,8 @@ struct WorkLedgerView: View {
 
     private func detailView(_ item: WorkItem, readOnly: Bool) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.md) {
-            navigationTitle(archivedItem == nil ? "今日工作" : "最近 7 天", title: "") {
-                if archivedItem != nil {
-                    archivedItem = nil
-                } else {
-                    selectedItemID = nil
-                }
+            navigationTitle("今日工作", title: "") {
+                selectedItemID = nil
                 cancelEditing()
                 cancelProgressEditing()
             }
@@ -508,9 +235,13 @@ struct WorkLedgerView: View {
                 }
             }
 
+            if let span = store.work?.daySpans().first(where: { $0.id == item.id }) {
+                daySpanMiniBar(span)
+            }
+
             ScrollView {
                 VStack(alignment: .leading, spacing: DS.Space.sm) {
-                    Text("时间线")
+                    Text("记录")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     ForEach(item.events.filter { $0.kind != "progress_edited" }) { event in
@@ -560,13 +291,6 @@ struct WorkLedgerView: View {
                         .buttonStyle(.borderless)
                         .disabled(store.isWorkMutating)
 
-                        Button("取消任务") {
-                            pendingCancelItem = item
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(store.isWorkMutating)
-                        .accessibilityHint("将任务标为已取消并从今日列表移除")
-
                         Button("删除…") {
                             pendingDeleteItem = item
                         }
@@ -595,25 +319,6 @@ struct WorkLedgerView: View {
             }
         }
         .confirmationDialog(
-            "取消这个任务？",
-            isPresented: isCancelConfirmPresented,
-            titleVisibility: .visible
-        ) {
-            if let item = pendingCancelItem {
-                Button("取消任务") {
-                    applyStatus(item, .cancelled)
-                    pendingCancelItem = nil
-                }
-                Button("返回", role: .cancel) {
-                    pendingCancelItem = nil
-                }
-            }
-        } message: {
-            if let item = pendingCancelItem {
-                Text("「\(item.title)」会移出进行中/待处理，记录保留在最近 7 天。")
-            }
-        }
-        .confirmationDialog(
             "删除这个任务？",
             isPresented: isDeleteConfirmPresented,
             titleVisibility: .visible
@@ -629,7 +334,7 @@ struct WorkLedgerView: View {
             }
         } message: {
             if let item = pendingDeleteItem {
-                Text("「\(item.title)」会从台账视图中移除；事件仍保留且可撤销，不会出现在最近记录里。")
+                Text("「\(item.title)」会从台账视图中移除；事件仍保留且可撤销。")
             }
         }
         .background(
@@ -638,11 +343,7 @@ struct WorkLedgerView: View {
             Group {
                 if !isEditingItem {
                     backShortcut {
-                        if archivedItem != nil {
-                            archivedItem = nil
-                        } else {
-                            selectedItemID = nil
-                        }
+                        selectedItemID = nil
                     }
                 }
             }
@@ -651,9 +352,8 @@ struct WorkLedgerView: View {
 
     private func applyStatus(_ item: WorkItem, _ status: WorkStatus) {
         store.setWorkStatus(itemID: item.id, status: status, version: item.version) {
-            if status == .cancelled || status == .completed {
+            if status == .completed {
                 selectedItemID = nil
-                archivedItem = nil
             }
         }
     }
@@ -661,7 +361,6 @@ struct WorkLedgerView: View {
     private func applyDelete(_ item: WorkItem) {
         store.deleteWork(itemID: item.id, version: item.version) {
             selectedItemID = nil
-            archivedItem = nil
         }
     }
 
@@ -721,6 +420,42 @@ struct WorkLedgerView: View {
         }
         .onChange(of: editDetail) {
             resetEditIdempotencyIfPossible()
+        }
+    }
+
+    private func daySpanMiniBar(_ span: WorkDaySpan) -> some View {
+        let tint = WorkDaySpanChart.laneTint(for: span.item.id, status: span.item.status)
+        let range = span.yRange(in: 100)
+        let startLabel = span.startDay.count >= 10
+            ? String(span.startDay.dropFirst(5))
+            : span.startDay
+        let endLabel = span.endDay == BriefPaths.todayDateString()
+            ? "今天"
+            : (span.endDay.count >= 10 ? String(span.endDay.dropFirst(5)) : span.endDay)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: DS.Space.xs) {
+                Text("日期跨度")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                Text("\(startLabel) → \(endLabel) · \(span.spanDayCount) 天")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.06))
+                        .frame(height: 8)
+                    Capsule()
+                        .fill(tint.opacity(0.85))
+                        .frame(
+                            width: max(8, geo.size.width * CGFloat(range.height) / 100),
+                            height: 8
+                        )
+                        .offset(x: geo.size.width * CGFloat(range.y) / 100)
+                }
+            }
+            .frame(height: 8)
         }
     }
 
@@ -842,17 +577,6 @@ struct WorkLedgerView: View {
         }
     }
 
-    private func sectionLabel(_ title: String, count: Int) -> some View {
-        HStack(spacing: DS.Space.xs) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-            Text("\(count)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-        }
-    }
-
     private func capture() {
         let text = captureText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -917,16 +641,11 @@ struct WorkLedgerView: View {
         return "ui:note:\(itemID):\(UUID().uuidString)"
     }
 
-    private func displayDate(_ value: String) -> String {
-        guard let date = ISO8601DateFormatter.workDay.date(from: value) else { return value }
-        return DateFormatter.workHistory.string(from: date)
-    }
 }
 
 private struct WorkItemRow: View {
     let item: WorkItem
     let action: () -> Void
-    var onCancel: (() -> Void)? = nil
     var onComplete: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
 
@@ -940,7 +659,7 @@ private struct WorkItemRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
                         .font(.callout)
-                        .foregroundStyle(item.status == .cancelled ? .secondary : .primary)
+                        .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
                         .lineLimit(2)
                     if let progress = item.lastProgress, !progress.isEmpty {
@@ -968,9 +687,6 @@ private struct WorkItemRow: View {
             if item.status == .pending || item.status == .inProgress {
                 if let onComplete {
                     Button("标记完成") { onComplete() }
-                }
-                if let onCancel {
-                    Button("取消任务") { onCancel() }
                 }
                 if let onDelete {
                     Button("删除…", role: .destructive) { onDelete() }

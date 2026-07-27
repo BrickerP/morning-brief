@@ -94,7 +94,7 @@ Hard instructions: no multi-paragraph; no tool-call dumps; weight the ending; if
 ## Data / cache contract (for later MVP — not implementing yet)
 
 - Extract last ~8 user/assistant turns from parent JSONL (and trailing subagent only if needed for tail coherence — default: parent tail first)
-- Persist summary with `fingerprint` **and** `recipe_version` (e.g. `tail-v1`) so old whole-session caches invalidate once
+- Persist summary with `fingerprint` **and** `recipe_version` (e.g. `tail-v2`) so caches invalidate when the **user-turn tail** changes — not on JSONL mtime/tool noise. Summarize runs sequentially (never parallel session fan-out).
 - List sort: mtime descending (keep)
 
 ## Explicitly out of wireframe

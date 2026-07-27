@@ -5,14 +5,31 @@ struct AgentChatView: View {
 
     @State private var draft = ""
     @State private var showingApplyConfirmation = false
+    @State private var expandedSessionID: String?
+    @State private var sessionSourceTab: SessionSourceTab = .claude
     @AppStorage("MorningBrief.selectedLens") private var selectedLensRaw = "agent"
     @FocusState private var composerFocused: Bool
+
+    private enum SessionSourceTab: String, CaseIterable, Identifiable {
+        case claude
+        case codex
+        case cursor
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .claude: "Claude"
+            case .codex: "Codex"
+            case .cursor: "Cursor"
+            }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.md) {
             ScrollView {
                 VStack(alignment: .leading, spacing: DS.Space.lg) {
-                    intro
                     if let analysis = store.sessionAnalysis {
                         pastedEnding
                         analysisView(analysis)
@@ -48,83 +65,115 @@ struct AgentChatView: View {
         }
     }
 
-    private var intro: some View {
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
-            Label("Claude Session → Todo", systemImage: "bubble.left.and.text.bubble.right")
-                .font(.headline)
-            Text("从下方选一条最近会话，或粘贴 Claude session 结尾。列表显示缓存的 Agent 摘要；点选后才会通读并匹配 Todo，分析阶段不改台账。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+    private var sessionsForTab: [RecentSession] {
+        store.recentSessions.filter { $0.source == sessionSourceTab.rawValue }
     }
 
     @ViewBuilder
     private var recentSessionsList: some View {
-        if !store.recentSessions.isEmpty {
-            VStack(alignment: .leading, spacing: DS.Space.xs) {
-                HStack(spacing: DS.Space.xs) {
-                    sectionTitle("最近会话", count: store.recentSessions.count)
-                    Spacer(minLength: 0)
-                    if store.isSessionSummarizing {
-                        ProgressView()
-                            .controlSize(.mini)
-                        Text("生成摘要")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            HStack(spacing: DS.Space.xs) {
+                Text("最近会话")
+                    .font(.caption.weight(.semibold))
+                Spacer(minLength: 0)
+                if store.isSessionSummarizing {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("生成摘要")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
-                ForEach(store.recentSessions) { session in
-                    Button {
-                        store.analyzeConfirmedSession(sourceFile: session.sourceFile)
-                    } label: {
-                        recentSessionRow(session)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(store.isSessionAnalyzing || store.isSessionLocating)
+            }
+            Picker("来源", selection: $sessionSourceTab) {
+                ForEach(SessionSourceTab.allCases) { tab in
+                    Text("\(tab.title) \(store.recentSessions.filter { $0.source == tab.rawValue }.count)")
+                        .tag(tab)
                 }
-                Text("点选即通读分析。摘要按指纹缓存，不会反复调用 Agent CLI。")
-                    .font(.caption2)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .onChange(of: sessionSourceTab) {
+                expandedSessionID = nil
+            }
+
+            if sessionsForTab.isEmpty {
+                Text(store.recentSessions.isEmpty ? "暂无会话" : "该来源暂无最近会话")
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .padding(.vertical, DS.Space.xs)
+            } else {
+                ForEach(sessionsForTab) { session in
+                    recentSessionRow(session)
+                }
             }
         }
     }
 
     private func recentSessionRow(_ session: RecentSession) -> some View {
-        HStack(alignment: .top, spacing: DS.Space.sm) {
-            Image(systemName: session.summaryStatus == "ready" ? "text.quote" : "clock.arrow.circlepath")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.displayTitle)
-                    .font(.callout)
-                    .foregroundStyle(session.summaryStatus == "pending" ? .secondary : .primary)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
-                HStack(spacing: 6) {
-                    Text(sessionProject(session.project))
-                        .lineLimit(1)
-                    if session.subagentCount > 0 {
-                        Text("· \(session.subagentCount) subagent")
-                    }
-                    if let date = session.modifiedAtDate {
-                        Text("· \(Self.relativeFormatter.localizedString(for: date, relativeTo: Date()))")
-                    }
+        let expanded = expandedSessionID == session.id
+        return VStack(alignment: .leading, spacing: DS.Space.sm) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    expandedSessionID = expanded ? nil : session.id
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            } label: {
+                HStack(alignment: .top, spacing: DS.Space.sm) {
+                    Image(systemName: session.summaryStatus == "ready" ? "text.quote" : "clock.arrow.circlepath")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.displayTitle)
+                            .font(.callout)
+                            .foregroundStyle(session.summaryStatus == "pending" ? .secondary : .primary)
+                            .lineLimit(expanded ? nil : 2)
+                            .multilineTextAlignment(.leading)
+                        HStack(spacing: 6) {
+                            Text(sessionProject(session.project))
+                                .lineLimit(1)
+                            if session.subagentCount > 0 {
+                                Text("· \(session.subagentCount) subagent")
+                            }
+                            if let date = session.modifiedAtDate {
+                                Text("· \(Self.relativeFormatter.localizedString(for: date, relativeTo: Date()))")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: DS.Space.xs)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: DS.Space.xs)
-            Image(systemName: "chevron.right")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            .buttonStyle(.plain)
+
+            if expanded {
+                if session.supportsAnalyze {
+                    Button {
+                        store.analyzeConfirmedSession(sourceFile: session.sourceFile)
+                    } label: {
+                        Text("通读分析")
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(store.isSessionAnalyzing || store.isSessionLocating)
+                } else {
+                    Text("\(session.sourceTitle) 会话目前只支持摘要预览")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(DS.Palette.cardFill)
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
-        .contentShape(Rectangle())
     }
 
     /// Turn a Claude project dir name ("-Users-me-work") into a readable tail.
@@ -169,9 +218,6 @@ struct AgentChatView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
-                Text("确认无误后再通读分析（约需 1–5 分钟）。")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             }
             .padding(DS.Space.sm)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -185,26 +231,13 @@ struct AgentChatView: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: DS.Space.xs) {
-            Text("或粘贴会话结尾")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $draft)
-                    .font(.callout)
-                    .scrollContentBackground(.hidden)
-                    .padding(6)
-                    .focused($composerFocused)
-                if draft.isEmpty {
-                    Text("粘贴 Claude terminal session 最后的几段内容…")
-                        .font(.callout)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 14)
-                        .allowsHitTesting(false)
-                }
-            }
-            .frame(minHeight: 140)
+        TextEditor(text: $draft)
+            .font(.callout)
+            .scrollContentBackground(.hidden)
+            .padding(6)
+            .focused($composerFocused)
+            .accessibilityLabel("会话结尾")
+            .frame(minHeight: 120)
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.md)
                     .fill(Color(nsColor: .textBackgroundColor))
@@ -213,26 +246,7 @@ struct AgentChatView: View {
                 RoundedRectangle(cornerRadius: DS.Radius.md)
                     .stroke(DS.Palette.cardStroke)
             }
-            HStack {
-                Button {
-                    if let clip = NSPasteboard.general.string(forType: .string), !clip.isEmpty {
-                        draft = draft.isEmpty ? clip : draft + "\n" + clip
-                    }
-                } label: {
-                    Label("粘贴", systemImage: "doc.on.clipboard")
-                }
-                .buttonStyle(.borderless)
-                .font(.caption)
-                Text("\(draft.count) 字符")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Text("建议包含 1–2 行有辨识度的最终结论")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .onAppear { composerFocused = true }
+            .onAppear { composerFocused = true }
     }
 
     @ViewBuilder

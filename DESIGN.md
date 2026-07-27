@@ -12,7 +12,7 @@
 - Avoid: Purple gradients, neon accents, “AI slop” aesthetics, mascot icons, dense widget grids, shimmer loaders, chat bubbles, Kanban squeezed into a menu
 
 ## Product goals
-- Goals: Surface today’s brief at a glance; capture and maintain today's work throughout the day; expose pending/in-progress/completed/cancelled state; allow explicit **删除** (append-only tombstone hide) distinct from **取消**; retain progress and recent completion history; recover a Claude session from pasted ending text; let the local agent summarize and propose inspectable Todo updates before confirmed, reversible writes
+- Goals: Surface today’s brief at a glance; capture and maintain today's work throughout the day; expose pending/in-progress/completed state; **编辑 = 修改 + 删除** (delete = append-only tombstone hide; no cancel status); retain progress and recent completion history; recover a Claude session from pasted ending text; let the local agent summarize and propose inspectable Todo updates before confirmed, reversible writes
 - Non-goals: Full markdown editor, project-management hierarchy, calendar/timeboxing, generic connector marketplace, general-purpose multi-session chat, Dock presence, multi-window browsing, notification spam, hard SQL purge of ledger events
 - Success signals: User captures meeting work before context is lost; one opening answers what is pending/active/completed; agent changes remain explainable and undoable; the brief stays readable without competing with the ledger
 
@@ -32,10 +32,10 @@
 - Principle 3: **System-native** — `windowBackgroundColor`, bordered buttons, no custom chrome fighting macOS
 - Principle 4: **Autonomous but observable** — the agent may decide and mutate without approval dialogs, but every change exposes actor, reason, evidence, and undo
 - Principle 5: **Append progress** — decisions, blockers, and next steps become chronological events instead of overwritten notes
-- Tradeoffs: Rich markdown remains secondary; the MVP favors four states and recent history over projects, deadlines, priorities, drag ordering, or deep analytics
+- Tradeoffs: Rich markdown remains secondary; the MVP favors three states plus delete over cancel/archive taxonomies, projects, deadlines, priorities, drag ordering, or deep analytics
 
 ## Visual language
-- Color: Neutrals from system palette; active blue for in-progress/unread agent changes; completion green; cancelled gray; error red remains reserved for failures
+- Color: Neutrals from system palette; active blue for in-progress/unread agent changes; completion green; error red remains reserved for failures
 - Typography: `title3.semibold` app/item title, `headline` section titles, `callout` task/progress text, `caption` state/actor labels, monospaced captions for timestamps/evidence IDs
 - Spacing/layout rhythm: 20pt panel padding, 16pt vertical sections, 8pt chip spacing, 20pt between brief sections
 - Shape/radius/elevation: 8pt rounded notice boxes; capsule chips; no drop shadows on panel (MenuBarExtra window provides depth)
@@ -45,7 +45,7 @@
 ## Components
 - Existing components to reuse: SwiftUI `MenuBarExtra`, `ScrollView`, `Divider`, system `bordered` buttons
 - New/changed components: three-way lens selector, work overview, quick capture, work row, item detail, event rail, recent-history view, Claude session composer, Agent summary/match/proposal review, confirmation action, plus existing brief components
-- Variants and states: Empty brief/workday, pending, in-progress, completed, cancelled, read-only historical day, mutation in flight, mutation error followed by projection reconciliation, existing brief loading/degraded/error states
+- Variants and states: Empty brief/workday, pending, in-progress, completed, read-only historical day, mutation in flight, mutation error followed by projection reconciliation, existing brief loading/degraded/error states
 - Token/component ownership: Defined in Swift sources under `apps/MorningBrief/Sources/`
 
 ## Accessibility

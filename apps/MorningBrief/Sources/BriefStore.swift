@@ -45,6 +45,9 @@ final class BriefStore: ObservableObject {
     private var pipelineTask: Task<Void, Never>?
     private var workProjectionDatesInFlight = Set<String>()
     private var lastKnownToday = BriefPaths.todayDateString()
+    /// Coalesce Agent-tab opens so we don't stack summarize passes.
+    private var lastSessionListAt: Date?
+    private var lastSummaryEnsureAt: Date?
 
     private var dayDirectory: URL { BriefPaths.dayDirectory(forDateString: selectedDate) }
 
@@ -318,7 +321,6 @@ final class BriefStore: ObservableObject {
         onSuccess: (() -> Void)? = nil
     ) {
         let notice: String = switch status {
-        case .cancelled: "已取消"
         case .completed: "已完成"
         default: "状态已更新"
         }
@@ -473,16 +475,24 @@ final class BriefStore: ObservableObject {
     /// Load recent parent sessions for the pick-without-paste list.
     ///
     /// Fast path returns cached agent summaries when present. Missing summaries are
-    /// filled once via ``assistant summarize`` (fingerprint cache; no repeat agent calls).
-    func loadRecentSessions(limit: Int = 15) {
+    /// filled via ``assistant summarize`` (sequential; tail-fingerprint cache).
+    func loadRecentSessions() {
+        // MenuBarExtra re-fires onAppear on every panel open — coalesce list fetches.
+        if let lastSessionListAt,
+           Date().timeIntervalSince(lastSessionListAt) < 2,
+           !recentSessions.isEmpty {
+            ensureRecentSessionSummaries()
+            return
+        }
+        lastSessionListAt = Date()
         Task {
             do {
-                let result = try await runner.run(.assistantSessions(limit: limit))
+                let result = try await runner.run(.assistantSessions)
                 recentSessions = try decoder.decode(
                     RecentSessionList.self,
                     from: Data(result.stdout.utf8)
                 ).sessions
-                ensureRecentSessionSummaries(limit: limit)
+                ensureRecentSessionSummaries()
             } catch is CancellationError {
                 // ignore
             } catch {
@@ -492,26 +502,35 @@ final class BriefStore: ObservableObject {
     }
 
     /// Persist agent summaries for listed sessions that lack a fingerprint cache hit.
-    private func ensureRecentSessionSummaries(limit: Int) {
+    ///
+    /// One summarize pass at a time (backend is also sequential per session).
+    private func ensureRecentSessionSummaries() {
         let needsWork = recentSessions.contains { session in
             session.summaryStatus == "pending" || session.summaryStatus == nil
         }
         guard needsWork, !isSessionSummarizing else { return }
+        // Avoid stacking passes when the panel is toggled while a prior pass just finished
+        // and fingerprints are mid-write.
+        if let lastSummaryEnsureAt, Date().timeIntervalSince(lastSummaryEnsureAt) < 8 {
+            return
+        }
+        lastSummaryEnsureAt = Date()
         isSessionSummarizing = true
         summaryTask?.cancel()
         summaryTask = Task {
             defer { isSessionSummarizing = false }
             do {
-                let result = try await runner.run(.assistantSummarize(limit: limit))
+                let result = try await runner.run(.assistantSummarize)
                 let payload = try decoder.decode(
                     RecentSessionSummarizeResult.self,
                     from: Data(result.stdout.utf8)
                 )
                 recentSessions = payload.sessions
             } catch is CancellationError {
-                // ignore
+                lastSummaryEnsureAt = nil
             } catch {
                 // Non-fatal: keep preview/pending rows; next open retries only uncached sessions.
+                lastSummaryEnsureAt = nil
             }
         }
     }

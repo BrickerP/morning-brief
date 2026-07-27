@@ -255,38 +255,31 @@ struct MenuBarPanelView: View {
     // MARK: Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: DS.Space.sm) {
             Text("Morning Brief")
                 .font(.title3.weight(.semibold))
-            HStack(spacing: 8) {
-                Button {
-                    store.selectPreviousDate()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .buttonStyle(.borderless)
-                .disabled(!store.canSelectPreviousDate)
-                .accessibilityLabel("前一天")
-
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(store.displayDate)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline.weight(.medium))
                     .monospacedDigit()
-
-                Button {
-                    store.selectNextDate()
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .buttonStyle(.borderless)
-                .disabled(!store.canSelectNextDate)
-                .accessibilityLabel("后一天")
-
                 if !store.isViewingToday {
+                    Button("今天") {
+                        store.select(date: BriefPaths.todayDateString())
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                     tinyBadge("历史", background: Color.secondary.opacity(0.15))
                 } else if hasContent && store.isStale {
                     tinyBadge("陈旧", background: Color.orange.opacity(0.2))
                 }
+                Spacer(minLength: 0)
+            }
+            WorkActivityHeatmap(
+                selectedDate: store.selectedDate,
+                counts: store.work?.spanActivityCounts(endingAt: BriefPaths.todayDateString()) ?? [:]
+            ) { day in
+                store.select(date: day)
             }
         }
     }

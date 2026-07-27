@@ -21,11 +21,19 @@ MAX_TAIL_CHARS = 100_000
 MAX_PROPOSALS = 12
 MIN_ANCHOR_CHARS = 8
 ALLOWED_ACTIONS = {"add", "edit", "note", "status"}
-ALLOWED_STATUSES = {"pending", "in_progress", "completed", "cancelled"}
+ALLOWED_STATUSES = {"pending", "in_progress", "completed"}
 # List-summarizer recipe: last N user-started dialogue turns from the parent JSONL.
-SUMMARY_RECIPE_VERSION = "tail-v1"
+# Bump when prompt/window/fingerprint algorithm changes (invalidates list-summary cache).
+SUMMARY_RECIPE_VERSION = "tail-v2"
 SUMMARY_TAIL_TURNS = 8
 SUMMARY_MAX_CHARS = 80
+DEFAULT_CLAUDE_LIMIT = 10
+DEFAULT_CODEX_LIMIT = 5
+DEFAULT_CURSOR_LIMIT = 5
+SESSION_SOURCES = ("claude", "codex", "cursor")
+UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 CLAUDE_TIMING_LINE = re.compile(
     r"^[✻✽✶]\s+.*\bfor\s+\d+(?:\.\d+)?\s*(?:ms|s|m|h)\b",
@@ -221,24 +229,129 @@ locate_claude_session = find_claude_session
 
 
 def _validate_session_path(session_file: Path, root: Path) -> Path:
-    """Resolve and confirm ``session_file`` is a parent session under ``root``.
-
-    Guards ``analyze_confirmed_session`` against arbitrary paths: the resolved
-    file must be exactly ``<root>/<project>/<id>.jsonl`` (two parts under root),
-    a real file, with a ``.jsonl`` suffix. Subagent transcripts (four parts) and
-    any path outside the projects root are rejected.
-    """
+    """Resolve and confirm ``session_file`` is a parent Claude session under ``root``."""
     resolved = session_file.expanduser().resolve()
     root_resolved = root.resolve()
     try:
         relative = resolved.relative_to(root_resolved)
     except ValueError:
-        raise SessionAssistantError(f"Session file is outside the Claude projects root: {session_file}")
+        raise SessionAssistantError(
+            f"Session file is outside the Claude projects root: {session_file}"
+        )
     if resolved.suffix != ".jsonl" or len(relative.parts) != 2:
         raise SessionAssistantError(f"Not a top-level Claude session file: {session_file}")
     if not resolved.is_file():
         raise SessionAssistantError(f"Claude session file not found: {session_file}")
     return resolved
+
+
+def _codex_session_id(path: Path) -> str:
+    match = UUID_RE.search(path.stem)
+    return match.group(0).lower() if match else path.stem
+
+
+def _detect_session_source(
+    session_file: Path,
+    *,
+    claude_root: Path | None = None,
+    codex_root: Path | None = None,
+    cursor_root: Path | None = None,
+) -> str | None:
+    resolved = session_file.expanduser().resolve()
+    if not resolved.is_file() or resolved.suffix != ".jsonl":
+        return None
+    claude = (claude_root or (Path.home() / ".claude" / "projects")).resolve()
+    codex = (codex_root or (Path.home() / ".codex" / "sessions")).resolve()
+    cursor = (cursor_root or (Path.home() / ".cursor" / "projects")).resolve()
+    try:
+        relative = resolved.relative_to(claude)
+        if len(relative.parts) == 2:
+            return "claude"
+    except ValueError:
+        pass
+    try:
+        relative = resolved.relative_to(codex)
+        if relative.name.startswith("rollout-") and "archived_sessions" not in resolved.parts:
+            return "codex"
+    except ValueError:
+        pass
+    try:
+        relative = resolved.relative_to(cursor)
+        parts = relative.parts
+        if (
+            len(parts) == 4
+            and parts[1] == "agent-transcripts"
+            and parts[2] == parts[3].removesuffix(".jsonl")
+            and "subagents" not in parts
+        ):
+            return "cursor"
+    except ValueError:
+        pass
+    return None
+
+
+def _resolve_session_file(
+    session_file: Path | str,
+    *,
+    claude_projects_root: Path | None = None,
+    codex_sessions_root: Path | None = None,
+    cursor_projects_root: Path | None = None,
+) -> tuple[Path, str, dict[str, Any]]:
+    """Resolve an allowed session path and build a listing/analyze session dict."""
+    path = Path(session_file)
+    source = _detect_session_source(
+        path,
+        claude_root=claude_projects_root,
+        codex_root=codex_sessions_root,
+        cursor_root=cursor_projects_root,
+    )
+    if source is None:
+        # Prefer Claude-shaped validation error when a Claude root is in play.
+        root = claude_projects_root or (Path.home() / ".claude" / "projects")
+        resolved = _validate_session_path(path, root)
+        source = "claude"
+        session = _session_from_file(resolved, root)
+        session["source"] = source
+        return resolved, source, session
+
+    resolved = path.expanduser().resolve()
+    if source == "claude":
+        root = (claude_projects_root or (Path.home() / ".claude" / "projects")).resolve()
+        session = _session_from_file(resolved, root)
+    elif source == "codex":
+        session = {
+            "id": _codex_session_id(resolved),
+            "project": resolved.parent.name,  # day folder YYYY-MM-DD
+            "source_file": str(resolved),
+            "modified_at": datetime.fromtimestamp(
+                resolved.stat().st_mtime, timezone.utc
+            ).isoformat().replace("+00:00", "Z"),
+            "matched_anchors": [],
+            "confidence": "medium",
+            "file_count": 1,
+            "subagent_count": 0,
+            "files": [str(resolved)],
+        }
+    else:
+        # cursor: <slug>/agent-transcripts/<uuid>/<uuid>.jsonl
+        slug = resolved.relative_to(
+            (cursor_projects_root or (Path.home() / ".cursor" / "projects")).resolve()
+        ).parts[0]
+        session = {
+            "id": resolved.stem,
+            "project": slug,
+            "source_file": str(resolved),
+            "modified_at": datetime.fromtimestamp(
+                resolved.stat().st_mtime, timezone.utc
+            ).isoformat().replace("+00:00", "Z"),
+            "matched_anchors": [],
+            "confidence": "medium",
+            "file_count": 1,
+            "subagent_count": 0,
+            "files": [str(resolved)],
+        }
+    session["source"] = source
+    return resolved, source, session
 
 
 def _shorten_preview(value: str, *, max_chars: int = SUMMARY_MAX_CHARS) -> str:
@@ -266,8 +379,27 @@ def _message_text(record: dict[str, Any]) -> str | None:
     return None
 
 
-def _iter_dialogue_messages(path: Path) -> list[dict[str, str]]:
-    """Return ordered user/assistant text messages from a parent session JSONL."""
+def _payload_text(content: Any) -> str | None:
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type in {None, "text", "input_text", "output_text"} and isinstance(
+                part.get("text"), str
+            ):
+                text = part["text"].strip()
+                if text:
+                    chunks.append(text)
+        if chunks:
+            return "\n".join(chunks)
+    return None
+
+
+def _iter_claude_dialogue(path: Path) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     try:
         with path.open(encoding="utf-8", errors="ignore") as handle:
@@ -291,6 +423,77 @@ def _iter_dialogue_messages(path: Path) -> list[dict[str, str]]:
     except OSError:
         return []
     return messages
+
+
+def _iter_cursor_dialogue(path: Path) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                role = record.get("role")
+                if role not in {"user", "assistant"}:
+                    continue
+                text = _payload_text((record.get("message") or {}).get("content"))
+                if not text:
+                    continue
+                messages.append({"role": role, "text": text})
+    except OSError:
+        return []
+    return messages
+
+
+def _iter_codex_dialogue(path: Path) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    try:
+        with path.open(encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                kind = record.get("type")
+                payload = record.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if kind == "event_msg" and payload.get("type") == "user_message":
+                    text = payload.get("message")
+                    if isinstance(text, str) and text.strip():
+                        messages.append({"role": "user", "text": text.strip()})
+                    continue
+                if kind == "response_item":
+                    role = payload.get("role")
+                    if role not in {"user", "assistant"}:
+                        continue
+                    text = _payload_text(payload.get("content"))
+                    if text:
+                        messages.append({"role": role, "text": text})
+    except OSError:
+        return []
+    return messages
+
+
+def _iter_dialogue_messages(path: Path) -> list[dict[str, str]]:
+    """Return ordered user/assistant text messages from a parent session JSONL."""
+    source = _detect_session_source(path)
+    if source == "codex":
+        return _iter_codex_dialogue(path)
+    if source == "cursor":
+        return _iter_cursor_dialogue(path)
+    return _iter_claude_dialogue(path)
 
 
 def _extract_tail_turns(
@@ -322,6 +525,9 @@ def _is_noisy_preview_text(text: str) -> bool:
         "skilled-response",
         "<command-message>",
         "<command-name>",
+        "the following is the codex agent history",
+        "# agents.md instructions",
+        "<environment_context>",
     )
     if any(marker in lowered for marker in noisy_markers):
         return True
@@ -346,41 +552,81 @@ def _session_preview(path: Path, *, max_chars: int = SUMMARY_MAX_CHARS) -> str:
 
 
 def _session_fingerprint(session: dict[str, Any]) -> str:
-    """Stable fingerprint of the transcript set for cache invalidation.
+    """Fingerprint the list-summary *inputs* (dialogue tail), not file mtimes.
 
-    Uses path + size + mtime_ns per file (not full content hash) so listing stays
-    cheap while still re-summarizing once when the session grows or changes.
+    Active Claude sessions rewrite JSONL constantly (tool noise → mtime/size churn).
+    Fingerprinting path+mtime caused Agent-tab opens to re-run the agent over and
+    over for the same tail. Invalidate only when the tail window content changes.
     """
+    source = session.get("source_file")
+    path = Path(source) if source else None
     digest = hashlib.sha256()
-    for source_value in session.get("files") or []:
-        path = Path(source_value)
-        try:
-            stat = path.stat()
-            digest.update(str(path.resolve()).encode("utf-8"))
-            digest.update(b"\0")
-            digest.update(str(stat.st_size).encode("ascii"))
-            digest.update(b"\0")
-            digest.update(str(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1e9))).encode("ascii"))
-            digest.update(b"\0")
-        except OSError:
-            digest.update(str(path).encode("utf-8"))
-            digest.update(b"\0missing\0")
+    digest.update(SUMMARY_RECIPE_VERSION.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(str(SUMMARY_TAIL_TURNS).encode("ascii"))
+    digest.update(b"\0")
+    if path is None or not path.is_file():
+        digest.update(b"missing")
+        return digest.hexdigest()
+    # Hash user turns only — assistant/tool streaming rewrites the JSONL constantly
+    # without a new user ask and must not invalidate the list-row cache.
+    user_turns = [
+        message
+        for message in _extract_tail_turns(path, max_turns=SUMMARY_TAIL_TURNS)
+        if message.get("role") == "user"
+    ]
+    if not user_turns:
+        digest.update(b"empty-tail")
+        return digest.hexdigest()
+    for message in user_turns:
+        digest.update(message.get("text", "").encode("utf-8"))
+        digest.update(b"\0")
     return digest.hexdigest()
 
 
 def _summary_cache_path(session_id: str, summaries_dir: Path) -> Path:
-    if not re.fullmatch(r"[0-9a-fA-F-]{36}", session_id):
+    # Accept bare UUIDs (legacy Claude) or ``source:uuid`` composite ids.
+    if re.fullmatch(r"[0-9a-fA-F-]{36}", session_id):
+        filename = session_id
+    elif re.fullmatch(
+        r"(?:claude|codex|cursor):[0-9a-fA-F-]{36}",
+        session_id,
+        flags=re.IGNORECASE,
+    ):
+        filename = session_id.replace(":", "_")
+    else:
         raise SessionAssistantError(f"Invalid session ID for summary cache: {session_id}")
-    return summaries_dir / f"{session_id}.json"
+    return summaries_dir / f"{filename}.json"
+
+
+def _summary_cache_candidates(session_id: str, summaries_dir: Path) -> list[Path]:
+    primary = _summary_cache_path(session_id, summaries_dir)
+    paths = [primary]
+    if session_id.startswith("claude:"):
+        legacy = summaries_dir / f"{session_id.split(':', 1)[1]}.json"
+        if legacy not in paths:
+            paths.append(legacy)
+    return paths
 
 
 def _read_summary_cache(
     session: dict[str, Any],
     *,
     summaries_dir: Path,
+    allow_stale: bool = False,
 ) -> dict[str, Any] | None:
-    path = _summary_cache_path(session["id"], summaries_dir)
-    if not path.is_file():
+    """Return a cached list-summary document when usable.
+
+    ``allow_stale=True`` (listing / auto-ensure): keep showing the last blurb even
+    if the user-turn fingerprint moved, so Agent-tab opens do not re-burn tokens
+    on every new message in an active session.
+
+    ``allow_stale=False`` (explicit ``summarize_session``): require an exact
+    fingerprint match so ``--force`` / intentional refresh can rewrite.
+    """
+    candidates = _summary_cache_candidates(session["id"], summaries_dir)
+    path = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if path is None:
         return None
     try:
         cached = json.loads(path.read_text(encoding="utf-8"))
@@ -388,11 +634,48 @@ def _read_summary_cache(
         return None
     if not isinstance(cached, dict):
         return None
-    if cached.get("recipe_version") != SUMMARY_RECIPE_VERSION:
+    recipe = cached.get("recipe_version")
+    # Accept prior tail-v1 rows for one-time fingerprint migration.
+    if recipe not in {SUMMARY_RECIPE_VERSION, "tail-v1"}:
         return None
-    if cached.get("fingerprint") != _session_fingerprint(session):
-        return None
-    return cached
+    current_fp = _session_fingerprint(session)
+    exact = (
+        cached.get("fingerprint") == current_fp
+        and recipe == SUMMARY_RECIPE_VERSION
+        and cached.get("fingerprint_kind") == "dialogue_tail_users"
+    )
+    target_path = _summary_cache_path(session["id"], summaries_dir)
+    if exact:
+        if path != target_path:
+            try:
+                atomic_write_json(target_path, cached)
+            except OSError:
+                pass
+        return cached
+
+    has_payload = (
+        isinstance(cached.get("summary"), str) and bool(cached["summary"].strip())
+    ) or bool(cached.get("error"))
+    # Legacy file-stat fingerprints → stamp user-turn fingerprint once.
+    if has_payload and cached.get("fingerprint_kind") != "dialogue_tail_users":
+        migrated = {
+            **cached,
+            "fingerprint": current_fp,
+            "fingerprint_kind": "dialogue_tail_users",
+            "recipe_version": SUMMARY_RECIPE_VERSION,
+        }
+        try:
+            atomic_write_json(target_path, migrated)
+        except OSError:
+            pass
+        return migrated
+
+    if cached.get("fingerprint") == current_fp:
+        return cached
+    # Soft hit for list UI: prefer a slightly stale blurb over another agent call.
+    if allow_stale and has_payload:
+        return cached
+    return None
 
 
 def _listing_entry(
@@ -401,8 +684,13 @@ def _listing_entry(
     preview: str,
     summaries_dir: Path | None = None,
 ) -> dict[str, Any]:
+    source = session.get("source") or "claude"
+    raw_id = session["id"]
+    list_id = raw_id if ":" in raw_id else f"{source}:{raw_id}"
+    cache_session = {**session, "id": list_id, "source": source}
     entry: dict[str, Any] = {
-        "id": session["id"],
+        "id": list_id,
+        "source": source,
         "project": session["project"],
         "source_file": session["source_file"],
         "modified_at": session["modified_at"],
@@ -413,7 +701,9 @@ def _listing_entry(
     }
     if summaries_dir is None:
         return entry
-    cached = _read_summary_cache(session, summaries_dir=summaries_dir)
+    cached = _read_summary_cache(
+        cache_session, summaries_dir=summaries_dir, allow_stale=True
+    )
     if cached is None:
         return entry
     summary = cached.get("summary")
@@ -425,27 +715,14 @@ def _listing_entry(
     return entry
 
 
-def list_recent_sessions(
-    limit: int = 15,
-    project: str | None = None,
+def _scan_claude_sessions(
+    root: Path,
     *,
-    claude_projects_root: Path | None = None,
-    summaries_dir: Path | None = None,
-) -> dict[str, Any]:
-    """List recent parent Claude sessions, newest first, for pick-without-paste.
-
-    Scans ``<root>/*/*.jsonl`` (parent sessions only — two path parts, excluding
-    ``subagents/``), sorts by mtime descending, and returns lightweight metadata
-    plus a cheap preview and any persisted agent summary per session. Never calls
-    the agent CLI — use ``ensure_session_summaries`` to generate missing summaries.
-    """
-    root = claude_projects_root or (Path.home() / ".claude" / "projects")
-    if not root.is_dir():
-        raise SessionAssistantError(f"Claude projects directory not found: {root}")
-    if limit < 1:
-        raise SessionAssistantError("limit must be at least 1")
-    cache_dir = summaries_dir if summaries_dir is not None else paths.SESSION_SUMMARIES_DIR
-
+    limit: int,
+    project: str | None,
+) -> list[tuple[float, Path, str]]:
+    if limit < 1 or not root.is_dir():
+        return []
     candidates: list[tuple[float, Path]] = []
     for path in root.glob("*/*.jsonl"):
         try:
@@ -461,11 +738,111 @@ def list_recent_sessions(
         except OSError:
             continue
         candidates.append((mtime, path))
-
     candidates.sort(key=lambda entry: entry[0], reverse=True)
+    return [(mtime, path, "claude") for mtime, path in candidates[:limit]]
+
+
+def _scan_codex_sessions(root: Path, *, limit: int) -> list[tuple[float, Path, str]]:
+    if limit < 1 or not root.is_dir():
+        return []
+    candidates: list[tuple[float, Path]] = []
+    for path in root.rglob("rollout-*.jsonl"):
+        if not path.is_file():
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        candidates.append((mtime, path))
+    candidates.sort(key=lambda entry: entry[0], reverse=True)
+    return [(mtime, path, "codex") for mtime, path in candidates[:limit]]
+
+
+def _scan_cursor_sessions(root: Path, *, limit: int) -> list[tuple[float, Path, str]]:
+    if limit < 1 or not root.is_dir():
+        return []
+    candidates: list[tuple[float, Path]] = []
+    for path in root.glob("*/agent-transcripts/*/*.jsonl"):
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        parts = relative.parts
+        if len(parts) != 4 or parts[1] != "agent-transcripts":
+            continue
+        if parts[2] != path.stem:
+            continue
+        # Skip Morning Brief's own agent workspaces.
+        if "MorningBrief-agent-workspaces" in parts[0] or "Application-Support-MorningBrief" in parts[0]:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        candidates.append((mtime, path))
+    candidates.sort(key=lambda entry: entry[0], reverse=True)
+    return [(mtime, path, "cursor") for mtime, path in candidates[:limit]]
+
+
+def list_recent_sessions(
+    limit: int | None = None,
+    project: str | None = None,
+    *,
+    claude_projects_root: Path | None = None,
+    codex_sessions_root: Path | None = None,
+    cursor_projects_root: Path | None = None,
+    claude_limit: int = DEFAULT_CLAUDE_LIMIT,
+    codex_limit: int = DEFAULT_CODEX_LIMIT,
+    cursor_limit: int = DEFAULT_CURSOR_LIMIT,
+    sources: tuple[str, ...] | None = None,
+    summaries_dir: Path | None = None,
+) -> dict[str, Any]:
+    """List recent sessions across Claude / Codex / Cursor for the Agent picker.
+
+    Defaults: Claude 10, Codex 5, Cursor 5. Never calls the agent CLI.
+    """
+    if limit is not None:
+        if limit < 1:
+            raise SessionAssistantError("limit must be at least 1")
+        claude_limit = limit
+
+    # When tests inject only a Claude temp root, don't scan the real Codex/Cursor homes.
+    if sources is None:
+        if (
+            claude_projects_root is not None
+            and codex_sessions_root is None
+            and cursor_projects_root is None
+        ):
+            sources = ("claude",)
+        else:
+            sources = SESSION_SOURCES
+
+    cache_dir = summaries_dir if summaries_dir is not None else paths.SESSION_SUMMARIES_DIR
+    claude_root = claude_projects_root or (Path.home() / ".claude" / "projects")
+    codex_root = codex_sessions_root or (Path.home() / ".codex" / "sessions")
+    cursor_root = cursor_projects_root or (Path.home() / ".cursor" / "projects")
+
+    scanned: list[tuple[float, Path, str]] = []
+    if "claude" in sources:
+        scanned.extend(
+            _scan_claude_sessions(claude_root, limit=claude_limit, project=project)
+        )
+    if "codex" in sources and project is None:
+        scanned.extend(_scan_codex_sessions(codex_root, limit=codex_limit))
+    if "cursor" in sources and project is None:
+        scanned.extend(_scan_cursor_sessions(cursor_root, limit=cursor_limit))
+
     sessions: list[dict[str, Any]] = []
-    for _, path in candidates[:limit]:
-        session = _session_from_file(path, root)
+    for _, path, source in scanned:
+        try:
+            _, _, session = _resolve_session_file(
+                path,
+                claude_projects_root=claude_root if source == "claude" else claude_projects_root,
+                codex_sessions_root=codex_root if source == "codex" else codex_sessions_root,
+                cursor_projects_root=cursor_root if source == "cursor" else cursor_projects_root,
+            )
+        except (SessionAssistantError, OSError):
+            continue
         sessions.append(
             _listing_entry(
                 session,
@@ -529,18 +906,19 @@ def summarize_session(
     persisted so the UI does not retry on every Agent-lens open until the
     transcript or recipe changes.
     """
-    root = claude_projects_root or (Path.home() / ".claude" / "projects")
-    if not root.is_dir():
-        raise SessionAssistantError(f"Claude projects directory not found: {root}")
-    resolved = _validate_session_path(Path(session_file), root)
-    session = _session_from_file(resolved, root)
+    resolved, source, session = _resolve_session_file(
+        session_file,
+        claude_projects_root=claude_projects_root,
+    )
+    cache_id = session["id"] if ":" in session["id"] else f"{source}:{session['id']}"
+    cache_session = {**session, "id": cache_id, "source": source}
     cache_dir = summaries_dir if summaries_dir is not None else paths.SESSION_SUMMARIES_DIR
     cache_dir.mkdir(parents=True, exist_ok=True)
-    fingerprint = _session_fingerprint(session)
-    cache_path = _summary_cache_path(session["id"], cache_dir)
+    fingerprint = _session_fingerprint(cache_session)
+    cache_path = _summary_cache_path(cache_id, cache_dir)
 
     if not force:
-        cached = _read_summary_cache(session, summaries_dir=cache_dir)
+        cached = _read_summary_cache(cache_session, summaries_dir=cache_dir)
         if cached is not None:
             return {**cached, "cached": True}
 
@@ -621,9 +999,10 @@ def summarize_session(
         error_message = str(error)
 
     document = {
-        "session_id": session["id"],
+        "session_id": cache_id,
         "source_file": session["source_file"],
         "fingerprint": fingerprint,
+        "fingerprint_kind": "dialogue_tail_users",
         "recipe_version": SUMMARY_RECIPE_VERSION,
         "summary": summary_text,
         "error": error_message,
@@ -635,27 +1014,31 @@ def summarize_session(
 
 
 def ensure_session_summaries(
-    limit: int = 15,
+    limit: int | None = None,
     project: str | None = None,
     *,
     cfg: AppConfig,
     claude_projects_root: Path | None = None,
+    codex_sessions_root: Path | None = None,
+    cursor_projects_root: Path | None = None,
     summaries_dir: Path | None = None,
     agent_workspace_dir: Path | None = None,
     agent_runner: Callable[..., ProcResult] = run_cancellable,
 ) -> dict[str, Any]:
-    """Summarize recent sessions that lack a fingerprint-matching cache entry.
+    """Summarize recent sessions that have no usable list-summary cache yet.
 
-    Calls the agent CLI at most once per session fingerprint. Sessions that already
-    have a ready or failed cache for the current fingerprint are skipped.
+    Runs **sequentially** (one agent CLI at a time) — never fans out parallel
+    sessions. Skips ready/failed rows, including stale blurbs kept for the list
+    UI after new user turns (no auto re-summarize on every Agent-tab open).
     """
     listing = list_recent_sessions(
         limit=limit,
         project=project,
         claude_projects_root=claude_projects_root,
+        codex_sessions_root=codex_sessions_root,
+        cursor_projects_root=cursor_projects_root,
         summaries_dir=summaries_dir,
     )
-    root = claude_projects_root or (Path.home() / ".claude" / "projects")
     summarized = 0
     skipped = 0
     failed = 0
@@ -666,7 +1049,7 @@ def ensure_session_summaries(
         document = summarize_session(
             entry["source_file"],
             cfg=cfg,
-            claude_projects_root=root,
+            claude_projects_root=claude_projects_root,
             summaries_dir=summaries_dir,
             agent_workspace_dir=agent_workspace_dir,
             agent_runner=agent_runner,
@@ -903,7 +1286,7 @@ Return ONLY one JSON object, without Markdown fences:
       "action": "note|status|edit|add",
       "item_id": "required except add",
       "text": "required for note",
-      "status": "pending|in_progress|completed|cancelled for status",
+      "status": "pending|in_progress|completed for status",
       "title": "required for add, optional for edit",
       "detail": "optional for add/edit",
       "reason": "evidence-based explanation"
@@ -967,11 +1350,14 @@ def analyze_confirmed_session(
     Used by the recent-session picker and the confirm step of the paste flow so
     the slow agent pass only runs against a session the user actually confirmed.
     """
-    root = claude_projects_root or (Path.home() / ".claude" / "projects")
-    if not root.is_dir():
-        raise SessionAssistantError(f"Claude projects directory not found: {root}")
-    resolved = _validate_session_path(Path(session_file), root)
-    session = _session_from_file(resolved, root)
+    resolved, source, session = _resolve_session_file(
+        session_file,
+        claude_projects_root=claude_projects_root,
+    )
+    if source != "claude":
+        raise SessionAssistantError(
+            "通读分析目前仅支持 Claude Code 会话；Codex / Cursor 可查看摘要。"
+        )
     return _analyze_session(
         session,
         cfg=cfg,

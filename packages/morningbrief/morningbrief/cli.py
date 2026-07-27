@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> None:
     p_todo_status = todo_sub.add_parser("status", help="Set a work item's status")
     p_todo_status.add_argument("item_id")
     p_todo_status.add_argument(
-        "status", choices=("pending", "in_progress", "completed", "cancelled")
+        "status", choices=("pending", "in_progress", "completed")
     )
     _add_mutation_arguments(p_todo_status)
 
@@ -146,15 +146,25 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_assistant_sessions = assistant_sub.add_parser(
         "sessions",
-        help="List recent Claude sessions, newest first, for pick-without-paste",
+        help="List recent Claude (10) / Codex (5) / Cursor (5) sessions",
     )
-    p_assistant_sessions.add_argument("--limit", type=int, default=15)
-    p_assistant_sessions.add_argument("--project", help="Restrict to one project directory name")
+    p_assistant_sessions.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Override Claude session count (default 10); Codex/Cursor stay at 5",
+    )
+    p_assistant_sessions.add_argument("--project", help="Restrict to one Claude project directory name")
     p_assistant_summarize = assistant_sub.add_parser(
         "summarize",
         help="Persist agent summaries for recent sessions (skips fingerprint cache hits)",
     )
-    p_assistant_summarize.add_argument("--limit", type=int, default=15)
+    p_assistant_summarize.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Override Claude session count when summarizing the recent list",
+    )
     p_assistant_summarize.add_argument("--project", help="Restrict to one project directory name")
     p_assistant_summarize.add_argument(
         "--session-file",
