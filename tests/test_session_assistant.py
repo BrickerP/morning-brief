@@ -8,7 +8,9 @@ from morningbrief.atomic import atomic_write_json
 from morningbrief.config import AppConfig
 from morningbrief.proc import ProcResult
 from morningbrief.session_assistant import (
+    SUMMARY_RECIPE_VERSION,
     SessionAssistantError,
+    _extract_tail_turns,
     _session_preview,
     _validate_session_path,
     analyze_confirmed_session,
@@ -337,7 +339,8 @@ def test_list_recent_sessions_orders_and_filters(tmp_path: Path) -> None:
         "11111111-1111-1111-1111-111111111111",
     ]
     assert listing["sessions"][0]["preview"] == "帮我排查支付回调"
-    assert listing["sessions"][1]["preview"] == "旧会话摘要"
+    # Fallback preview prefers latest user text; summary-type records are not used.
+    assert listing["sessions"][1]["preview"] == ""
     assert listing["sessions"][0]["summary"] is None
     assert listing["sessions"][0]["summary_status"] == "pending"
 
@@ -378,8 +381,27 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
         agent_runner=fake_agent,
     )
     assert first["cached"] is False
+    assert first["recipe_version"] == SUMMARY_RECIPE_VERSION
     assert first["summary"] == "第1次摘要：支付回调已修。"
-    assert (summaries / f"{session_id}.json").is_file()
+    cached_doc = json.loads((summaries / f"{session_id}.json").read_text(encoding="utf-8"))
+    assert cached_doc["recipe_version"] == SUMMARY_RECIPE_VERSION
+
+    # Old whole-session caches without recipe_version must not hit.
+    cached_doc.pop("recipe_version")
+    (summaries / f"{session_id}.json").write_text(
+        json.dumps(cached_doc, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    refreshed = summarize_session(
+        session_file,
+        cfg=cfg,
+        claude_projects_root=root,
+        summaries_dir=summaries,
+        agent_workspace_dir=workspaces,
+        agent_runner=fake_agent,
+    )
+    assert refreshed["cached"] is False
+    assert calls["n"] == 2
 
     second = summarize_session(
         session_file,
@@ -390,8 +412,8 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
         agent_runner=fake_agent,
     )
     assert second["cached"] is True
-    assert second["summary"] == "第1次摘要：支付回调已修。"
-    assert calls["n"] == 1
+    assert second["summary"] == "第2次摘要：支付回调已修。"
+    assert calls["n"] == 2
 
     ensured = ensure_session_summaries(
         limit=5,
@@ -404,7 +426,7 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
     assert ensured["summarized"] == 0
     assert ensured["skipped"] == 1
     assert ensured["sessions"][0]["summary_status"] == "ready"
-    assert calls["n"] == 1
+    assert calls["n"] == 2
 
     # Transcript change invalidates the fingerprint and allows one new summarize.
     session_file.write_text(
@@ -424,20 +446,54 @@ def test_summarize_session_persists_once_per_fingerprint(tmp_path: Path) -> None
         agent_runner=fake_agent,
     )
     assert third["cached"] is False
-    assert third["summary"] == "第2次摘要：支付回调已修。"
-    assert calls["n"] == 2
+    assert third["summary"] == "第3次摘要：支付回调已修。"
+    assert calls["n"] == 3
 
 
-def test_session_preview_prefers_summary_then_user(tmp_path: Path) -> None:
+def test_session_preview_prefers_latest_user_not_opener(tmp_path: Path) -> None:
     root = tmp_path / "projects"
     path = _write_session(
         root, "-proj", "33333333-3333-3333-3333-333333333333",
         [
             {"type": "user", "message": {"content": [{"text": "第一条用户消息"}]}},
             {"type": "assistant", "message": {"content": "回答"}},
+            {"type": "user", "message": {"content": "最后在做生产回归"}},
+            {"type": "assistant", "message": {"content": "好的"}},
         ],
     )
-    assert _session_preview(path) == "第一条用户消息"
+    assert _session_preview(path) == "最后在做生产回归"
+
+
+def test_session_preview_skips_task_notification_noise(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    path = _write_session(
+        root, "-proj", "88888888-8888-8888-8888-888888888888",
+        [
+            {"type": "user", "message": {"content": "对齐 Stripe promo jar"}},
+            {"type": "assistant", "message": {"content": "ok"}},
+            {
+                "type": "user",
+                "message": {
+                    "content": (
+                        '<task-notification> <task-id>x</task-id> '
+                        '<summary>Monitor event: "BE started"</summary>'
+                    )
+                },
+            },
+        ],
+    )
+    assert _session_preview(path) == "对齐 Stripe promo jar"
+
+
+def test_extract_tail_turns_keeps_last_user_started_window(tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    lines = []
+    for index in range(1, 6):
+        lines.append({"type": "user", "message": {"content": f"用户{index}"}})
+        lines.append({"type": "assistant", "message": {"content": f"助手{index}"}})
+    path = _write_session(root, "-proj", "77777777-7777-7777-7777-777777777777", lines)
+    tail = _extract_tail_turns(path, max_turns=2)
+    assert [message["text"] for message in tail] == ["用户4", "助手4", "用户5", "助手5"]
 
 
 def test_analyze_confirmed_session_runs_without_locate(tmp_path: Path) -> None:

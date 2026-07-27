@@ -79,11 +79,13 @@ briefctl assistant analyze --session-file PARENT_SESSION_JSONL
 briefctl assistant apply ANALYSIS_ID
 ```
 
-`assistant sessions` returns cheap `preview` plus any persisted agent `summary`
-(`summary_status`: `ready` | `pending` | `failed`). `assistant summarize` calls
-the Agent CLI at most once per session fingerprint and writes
-`~/Library/Application Support/MorningBrief/assistant/session-summaries/<id>.json`.
-Do not re-run summarize for cache hits unless the user explicitly asks with `--force`.
+`assistant sessions` returns cheap `preview` (latest user turn) plus any persisted
+agent `summary` (`summary_status`: `ready` | `pending` | `failed`).
+`assistant summarize` feeds only the last ~8 dialogue turns, asks for a 1–2
+sentence Chinese blurb, and writes
+`~/Library/Application Support/MorningBrief/assistant/session-summaries/<id>.json`
+keyed by transcript fingerprint **and** `recipe_version`. Do not re-run summarize
+for cache hits unless the user explicitly asks with `--force`.
 
 
 Common mutation flags are `--actor`, `--reason`, repeatable `--evidence`,

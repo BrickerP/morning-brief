@@ -159,6 +159,8 @@ def test_cli_sessions_lists_recent_parents(tmp_path: Path) -> None:
     assert payload["sessions"][0]["preview"] == "帮我排查支付回调"
     assert payload["sessions"][0]["summary"] is None
     assert payload["sessions"][0]["summary_status"] == "pending"
+    # Opener-only Claude summary records are not used as list preview anymore.
+    assert payload["sessions"][1]["preview"] == ""
 
 
 def test_cli_summarize_persists_and_skips_cache_hit(tmp_path: Path) -> None:
