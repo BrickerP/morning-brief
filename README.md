@@ -1,7 +1,7 @@
 # Morning Brief
 
-本地菜单栏晨报：Python `briefctl` 抓取 →（可选）Cursor `agent` 合成 →
-SwiftUI 菜单栏阅读、工作台账与 Claude Session 回传。
+本地桌面晨报：Python `briefctl` 抓取 →（可选）Cursor `agent` 合成 →
+SwiftUI 桌面 App 阅读、工作台账与 Claude Session 回传。
 
 macOS 14+ · Python ≥ 3.11 · 可选 [Cursor `agent` CLI](https://cursor.com)
 
@@ -14,7 +14,7 @@ cd morning-brief
 ```
 
 这会：创建 venv、把 `briefctl` 链到 `~/.local/bin`、把 `todo` skill
-链接到 Codex/Claude Code/Cursor、钉住 App 用的路径、编译并打开菜单栏 App。
+链接到 Codex/Claude Code/Cursor、钉住 App 用的路径、编译并打开桌面 App。
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -60,7 +60,7 @@ briefctl todo undo EVENT_ID --reason "恢复上一个状态"
 
 ### Claude Session 回传
 
-菜单栏的 `Agent` 页支持两种入口：**直接从最近会话列表里点一条**（免粘贴），或粘贴 Claude terminal session 的结尾。系统会：
+桌面 App 的 `Agent` 页支持两种入口：**直接从最近会话列表里点一条**（免粘贴），或粘贴 Claude terminal session 的结尾。系统会：
 
 1. （粘贴时）先用结尾中的辨识度文本**秒级定位** `~/.claude/projects` 下的原始 JSONL，展示匹配供确认——定位错可立即重选，不必空等；
 2. 把主会话及其 `subagents/*.jsonl` 放进隔离工作区，交给与晨报相同的
@@ -84,7 +84,9 @@ briefctl assistant apply ANALYSIS_ID
 | `~/Library/Application Support/MorningBrief/briefs/` | 每日产物 |
 | `~/Library/Application Support/MorningBrief/work-ledger.sqlite3` | 只追加的工作事件账本 |
 | `~/Library/Application Support/MorningBrief/assistant/` | Session 分析与确认写入记录 |
-| `~/Library/Application Support/MorningBrief/briefctl.path` | App 找 CLI |
+| `~/Library/Application Support/MorningBrief/briefctl.path` | App 找 CLI（指向 App Support 运行时，避免触碰 Downloads） |
+| `~/Library/Application Support/MorningBrief/runtime/` | 桌面 App 用的 briefctl venv（与仓位置无关） |
+| `~/Applications/MorningBrief.app` | 推荐的 App 安装位置（`make`/`bootstrap` 会拷过去） |
 
 **无完整 Xcode 也可以**：只需 Command Line Tools（`xcode-select --install`）。`scripts/build_app.sh` 用 `swiftc` 出 `.app`。
 
@@ -108,8 +110,11 @@ briefctl assistant apply ANALYSIS_ID
 ```bash
 make test
 make typecheck-swift
-./scripts/build_app.sh && open dist/MorningBrief.app
+make app   # builds into App Support, installs ~/Applications/MorningBrief.app
 ```
+
+Do not keep a runnable `.app` under `Downloads`/`Desktop`/`Documents` — macOS will prompt for folder access on every launch.
+
 
 ## 架构要点
 

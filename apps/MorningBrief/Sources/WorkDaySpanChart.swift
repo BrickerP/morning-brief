@@ -3,6 +3,7 @@ import SwiftUI
 /// Single work-ledger surface: date×task span chart with status chrome and hover detail.
 struct WorkDaySpanChart: View {
     let spans: [WorkDaySpan]
+    var highlightedItemID: String? = nil
     let onSelect: (WorkItem) -> Void
 
     @State private var hoveredID: String?
@@ -204,6 +205,18 @@ struct WorkDaySpanChart: View {
                 ForEach(visibleSpans) { span in
                     laneColumn(span, layout: layout)
                         .frame(width: layout.laneWidth)
+                        .scaleEffect(highlightedItemID == span.id ? 1.04 : 1)
+                        .shadow(
+                            color: highlightedItemID == span.id
+                                ? AppChrome.accent.opacity(0.45) : .clear,
+                            radius: highlightedItemID == span.id ? 8 : 0
+                        )
+                        .transition(
+                            .asymmetric(
+                                insertion: .move(edge: .trailing).combined(with: .opacity),
+                                removal: .opacity
+                            )
+                        )
                 }
             }
             .frame(maxWidth: layout.fillsWidth ? .infinity : nil, alignment: .leading)

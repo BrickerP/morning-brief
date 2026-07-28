@@ -146,13 +146,31 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_assistant_sessions = assistant_sub.add_parser(
         "sessions",
-        help="List recent Claude (10) / Codex (5) / Cursor (5) sessions",
+        help="List recent Claude / Codex / Cursor sessions (per-source limits)",
     )
     p_assistant_sessions.add_argument(
         "--limit",
         type=int,
         default=None,
-        help="Override Claude session count (default 10); Codex/Cursor stay at 5",
+        help="Deprecated alias for --claude-limit",
+    )
+    p_assistant_sessions.add_argument(
+        "--claude-limit",
+        type=int,
+        default=None,
+        help="Max Claude sessions (default 10)",
+    )
+    p_assistant_sessions.add_argument(
+        "--codex-limit",
+        type=int,
+        default=None,
+        help="Max Codex sessions (default 5)",
+    )
+    p_assistant_sessions.add_argument(
+        "--cursor-limit",
+        type=int,
+        default=None,
+        help="Max Cursor sessions (default 5)",
     )
     p_assistant_sessions.add_argument("--project", help="Restrict to one Claude project directory name")
     p_assistant_summarize = assistant_sub.add_parser(
@@ -203,7 +221,34 @@ def main(argv: list[str] | None = None) -> None:
                     tail = Path(args.input).read_text(encoding="utf-8")
                 result = find_claude_session(tail)
             elif args.assistant_cmd == "sessions":
-                result = list_recent_sessions(limit=args.limit, project=args.project)
+                from morningbrief.session_assistant import (
+                    DEFAULT_CLAUDE_LIMIT,
+                    DEFAULT_CODEX_LIMIT,
+                    DEFAULT_CURSOR_LIMIT,
+                )
+
+                claude_limit = (
+                    args.claude_limit
+                    if args.claude_limit is not None
+                    else DEFAULT_CLAUDE_LIMIT
+                )
+                # --limit remains a Claude-only override for older callers.
+                if args.limit is not None:
+                    claude_limit = args.limit
+                result = list_recent_sessions(
+                    project=args.project,
+                    claude_limit=claude_limit,
+                    codex_limit=(
+                        args.codex_limit
+                        if args.codex_limit is not None
+                        else DEFAULT_CODEX_LIMIT
+                    ),
+                    cursor_limit=(
+                        args.cursor_limit
+                        if args.cursor_limit is not None
+                        else DEFAULT_CURSOR_LIMIT
+                    ),
+                )
             elif args.assistant_cmd == "summarize":
                 if args.session_file:
                     result = summarize_session(

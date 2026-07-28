@@ -28,7 +28,7 @@ enum BriefctlCommand {
     case assistantAnalyze(tail: String)
     case assistantAnalyzeFile(sessionFile: String)
     case assistantLocate(tail: String)
-    case assistantSessions
+    case assistantSessions(claudeLimit: Int, codexLimit: Int, cursorLimit: Int)
     case assistantSummarize
     case assistantSummarizeFile(sessionFile: String)
     case assistantApply(analysisID: String)
@@ -101,8 +101,13 @@ enum BriefctlCommand {
             ["assistant", "analyze", "--session-file", sessionFile]
         case .assistantLocate:
             ["assistant", "locate", "--input", "-"]
-        case .assistantSessions:
-            ["assistant", "sessions"]
+        case let .assistantSessions(claudeLimit, codexLimit, cursorLimit):
+            [
+                "assistant", "sessions",
+                "--claude-limit", String(claudeLimit),
+                "--codex-limit", String(codexLimit),
+                "--cursor-limit", String(cursorLimit),
+            ]
         case .assistantSummarize:
             ["assistant", "summarize"]
         case let .assistantSummarizeFile(sessionFile):
@@ -226,13 +231,33 @@ struct BriefctlRunner: Sendable {
     func resolveExecutable() -> String? {
         if let override = ProcessInfo.processInfo.environment["MORNINGBRIEF_BRIEFCTL"],
            !override.isEmpty,
-           FileManager.default.isExecutableFile(atPath: override) {
+           FileManager.default.isExecutableFile(atPath: override),
+           !Self.isTCCProtectedPath(override) {
             return override
         }
-        for path in Self.candidates where FileManager.default.isExecutableFile(atPath: path) {
+        for path in Self.candidates
+            where FileManager.default.isExecutableFile(atPath: path)
+            && !Self.isTCCProtectedPath(path) {
             return path
         }
-        return Self.which("briefctl")
+        if let which = Self.which("briefctl"), !Self.isTCCProtectedPath(which) {
+            return which
+        }
+        return nil
+    }
+
+    /// Paths under Downloads/Desktop/Documents trigger macOS TCC prompts.
+    private static func isTCCProtectedPath(_ path: String) -> Bool {
+        let home = NSHomeDirectory()
+        let prefixes = [
+            home + "/Downloads/",
+            home + "/Desktop/",
+            home + "/Documents/",
+        ]
+        if prefixes.contains(where: { path.hasPrefix($0) }) { return true }
+        // Symlinks that resolve into a protected folder.
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        return prefixes.contains(where: { resolved.hasPrefix($0) })
     }
 
     func run(_ command: BriefctlCommand) async throws -> BriefctlResult {
@@ -285,6 +310,18 @@ struct BriefctlRunner: Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        // Never inherit a checkout cwd under Downloads — that alone prompts TCC.
+        let support = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/MorningBrief", isDirectory: true)
+        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        process.currentDirectoryURL = support
+        process.environment = {
+            var env = ProcessInfo.processInfo.environment
+            env["MORNINGBRIEF_SUPPORT"] = support.path
+            env["MORNINGBRIEF_ROOT"] = support.appendingPathComponent("runtime").path
+            env["PWD"] = support.path
+            return env
+        }()
 
         let outputDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("morningbrief-\(UUID().uuidString)", isDirectory: true)

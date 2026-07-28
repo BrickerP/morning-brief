@@ -9,10 +9,9 @@
 /* Begin PBXBuildFile section */
 		B10000000000000000000001 /* MorningBriefApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* MorningBriefApp.swift */; };
 		B10000000000000000000002 /* BriefModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000002 /* BriefModels.swift */; };
-		B10000000000000000000003 /* BriefStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* BriefStore.swift */; };
 		B10000000000000000000004 /* BriefWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000004 /* BriefWatcher.swift */; };
 		B10000000000000000000005 /* BriefctlRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000005 /* BriefctlRunner.swift */; };
-		B10000000000000000000006 /* MenuBarPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000006 /* MenuBarPanelView.swift */; };
+		B10000000000000000000006 /* RootWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000006 /* RootWindowView.swift */; };
 		B10000000000000000000008 /* DesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000008 /* DesignTokens.swift */; };
 		B10000000000000000000009 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000009 /* MarkdownRenderer.swift */; };
 		B1000000000000000000000A /* MarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000A /* MarkdownView.swift */; };
@@ -24,10 +23,9 @@
 		A10000000000000000000005 /* MorningBrief.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MorningBrief.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000001 /* MorningBriefApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MorningBriefApp.swift; sourceTree = "<group>"; };
 		B20000000000000000000002 /* BriefModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BriefModels.swift; sourceTree = "<group>"; };
-		B20000000000000000000003 /* BriefStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BriefStore.swift; sourceTree = "<group>"; };
 		B20000000000000000000004 /* BriefWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BriefWatcher.swift; sourceTree = "<group>"; };
 		B20000000000000000000005 /* BriefctlRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BriefctlRunner.swift; sourceTree = "<group>"; };
-		B20000000000000000000006 /* MenuBarPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarPanelView.swift; sourceTree = "<group>"; };
+		B20000000000000000000006 /* RootWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootWindowView.swift; sourceTree = "<group>"; };
 		B20000000000000000000008 /* DesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignTokens.swift; sourceTree = "<group>"; };
 		B20000000000000000000009 /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderer.swift; sourceTree = "<group>"; };
 		B2000000000000000000000A /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
@@ -52,10 +50,9 @@
 			children = (
 				B20000000000000000000001 /* MorningBriefApp.swift */,
 				B20000000000000000000002 /* BriefModels.swift */,
-				B20000000000000000000003 /* BriefStore.swift */,
 				B20000000000000000000004 /* BriefWatcher.swift */,
 				B20000000000000000000005 /* BriefctlRunner.swift */,
-				B20000000000000000000006 /* MenuBarPanelView.swift */,
+				B20000000000000000000006 /* RootWindowView.swift */,
 				B20000000000000000000008 /* DesignTokens.swift */,
 				B20000000000000000000009 /* MarkdownRenderer.swift */,
 				B2000000000000000000000A /* MarkdownView.swift */,
@@ -141,10 +138,9 @@
 			files = (
 				B10000000000000000000001 /* MorningBriefApp.swift in Sources */,
 				B10000000000000000000002 /* BriefModels.swift in Sources */,
-				B10000000000000000000003 /* BriefStore.swift in Sources */,
 				B10000000000000000000004 /* BriefWatcher.swift in Sources */,
 				B10000000000000000000005 /* BriefctlRunner.swift in Sources */,
-				B10000000000000000000006 /* MenuBarPanelView.swift in Sources */,
+				B10000000000000000000006 /* RootWindowView.swift in Sources */,
 				B10000000000000000000008 /* DesignTokens.swift in Sources */,
 				B10000000000000000000009 /* MarkdownRenderer.swift in Sources */,
 				B1000000000000000000000A /* MarkdownView.swift in Sources */,

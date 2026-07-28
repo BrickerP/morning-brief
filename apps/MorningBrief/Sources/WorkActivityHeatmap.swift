@@ -13,7 +13,7 @@ struct WorkActivityHeatmap: View {
 
     private let today = BriefPaths.todayDateString()
     private let minCell: CGFloat = 7
-    private let maxCell: CGFloat = 13
+    private let maxCell: CGFloat = 16
     private let gap: CGFloat = 2
     private let labelWidth: CGFloat = 10
 
@@ -25,7 +25,7 @@ struct WorkActivityHeatmap: View {
         GeometryReader { geo in
             let metrics = layoutMetrics(in: geo.size)
             let columns = weekColumns(weeks: metrics.weeks)
-            HStack(alignment: .top, spacing: 3) {
+            HStack(alignment: .center, spacing: 3) {
                 weekdayLabels(cell: metrics.cell)
                 HStack(spacing: gap) {
                     ForEach(Array(columns.enumerated()), id: \.offset) { _, column in
@@ -36,9 +36,9 @@ struct WorkActivityHeatmap: View {
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
             }
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("工作跨度日历")
@@ -52,18 +52,13 @@ struct WorkActivityHeatmap: View {
     private func layoutMetrics(in size: CGSize) -> Metrics {
         let safeWidth = max(0, size.width - labelWidth - 3)
         let safeHeight = max(0, size.height)
-        // Prefer height-driven cells so 7 rows consume the pane.
+        // Fill height with 7 rows, then pick as many weeks as width allows.
         let cellFromHeight = safeHeight > 0
             ? (safeHeight - gap * 6) / 7
             : minCell
-        var cell = min(maxCell, max(minCell, cellFromHeight))
+        let cell = min(maxCell, max(minCell, cellFromHeight))
         let weeksFromWidth = Int(floor((safeWidth + gap) / (cell + gap)))
-        let weeks = max(8, min(26, weeksFromWidth > 0 ? weeksFromWidth : preferredWeeks))
-        // Re-fit cell to consume leftover horizontal space without exceeding height fit.
-        if weeks > 0 {
-            let cellFromWidth = (safeWidth - CGFloat(weeks - 1) * gap) / CGFloat(weeks)
-            cell = min(cell, min(maxCell, max(minCell, cellFromWidth)))
-        }
+        let weeks = max(6, min(26, weeksFromWidth > 0 ? weeksFromWidth : preferredWeeks))
         return Metrics(cell: cell, weeks: weeks)
     }
 

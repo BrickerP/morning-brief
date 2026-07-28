@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://morningbrief.local/schemas/run_state.schema.json",
+  "title": "RunState",
+  "type": "object",
+  "required": ["date", "status", "started_at", "sources"],
+  "additionalProperties": true,
+  "properties": {
+    "date": { "type": "string" },
+    "run_id": { "type": "string" },
+    "status": {
+      "enum": ["idle", "fetching", "synthesizing", "ready", "degraded", "failed", "locked"]
+    },
+    "started_at": { "type": "string" },
+    "finished_at": { "type": ["string", "null"] },
+    "agent_auth": { "type": "boolean" },
+    "sources": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string" },
+          "duration_ms": { "type": "integer" },
+          "error": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "timings_ms": {
+      "type": "object",
+      "additionalProperties": { "type": "integer" }
+    }
+  }
+}

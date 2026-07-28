@@ -1,16 +1,27 @@
 import SwiftUI
 
-private enum PanelLens: String, CaseIterable, Identifiable {
+enum PanelLens: String, CaseIterable, Identifiable, Hashable {
     case work
     case agent
     case brief
 
+    static let storageKey = "MorningBrief.selectedLens"
+
     var id: String { rawValue }
+
     var title: String {
         switch self {
         case .work: "工作台账"
         case .agent: "Agent"
         case .brief: "晨报"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .work: "checklist"
+        case .agent: "bubble.left.and.bubble.right"
+        case .brief: "newspaper"
         }
     }
 }
@@ -129,113 +140,132 @@ struct MustReadRow: View {
     }
 }
 
-struct MenuBarPanelView: View {
-    @EnvironmentObject private var store: BriefStore
+struct RootWindowView: View {
+    @ObservedObject var appStore: Store<AppFeature.State, AppFeature.Action>
     @Environment(\.openURL) private var openURL
 
-    @State private var isFullExpanded = false
-    @State private var fullContentOpacity: Double = 0
     @State private var highlightedSectionID: String?
-    @AppStorage("MorningBrief.selectedLens") private var selectedLensRaw = PanelLens.brief.rawValue
     @AppStorage("MorningBrief.lastSeenAgentEvent") private var lastSeenAgentEventID = ""
     @AppStorage("MorningBrief.lastSeenBriefStamp") private var lastSeenBriefStamp = ""
 
-    private var selectedLens: PanelLens {
-        get { PanelLens(rawValue: selectedLensRaw) ?? .brief }
-        nonmutating set { selectedLensRaw = newValue.rawValue }
-    }
+    private var selectedLens: PanelLens { appStore.state.lens }
+    private var brief: BriefFeature.State { appStore.state.brief }
 
-    private var hasContent: Bool { store.brief?.hasReadableContent ?? false }
-    private var readableSections: [BriefSection] { store.brief?.readableSections ?? [] }
+    private var hasContent: Bool { brief.brief?.hasReadableContent ?? false }
+    private var readableSections: [BriefSection] { brief.brief?.readableSections ?? [] }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.Space.sm) {
-            titleBar
-            noticeBanner
-            if selectedLens == .work {
-                WorkLedgerView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if selectedLens == .agent {
-                dateChrome
-                AgentChatView()
-            } else {
-                dateChrome
-                Group {
-                    if hasContent {
-                        contentScroll
-                    } else {
-                        emptyState
-                    }
-                }
-                footer
+        HStack(spacing: 0) {
+            sidebar
+                .frame(width: AppChrome.sidebarWidth)
+                .frame(maxHeight: .infinity)
+                .background(AppChrome.sidebarFill.opacity(0.92))
+
+            Divider().opacity(0.35)
+
+            VStack(alignment: .leading, spacing: DS.Space.sm) {
+                detailPane
+            }
+            .padding(.horizontal, DS.Space.lg)
+            .padding(.vertical, DS.Space.md)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.ultraThinMaterial)
+        }
+        .frame(minWidth: 880, minHeight: 600)
+        .tint(AppChrome.accent)
+        .onAppear { handleLensAppear() }
+        .onChange(of: appStore.state.lens) {
+            handleLensAppear()
+            // Lens swaps can drop key/on-screen ordering (seen when jumping to 晨报).
+            DispatchQueue.main.async {
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.keyWindow?.makeKeyAndOrderFront(nil)
+                NSApp.windows.first?.makeKeyAndOrderFront(nil)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(width: 460, height: 720)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear {
-            if selectedLens == .work {
-                store.refreshWorkProjection()
-                markAgentUpdateSeen()
-            } else if selectedLens == .agent {
-                store.loadRecentSessions()
-            } else if selectedLens == .brief {
-                markBriefSeen()
-            }
-        }
-        .onChange(of: selectedLensRaw) {
-            if selectedLens == .work {
-                store.refreshWorkProjection()
-                markAgentUpdateSeen()
-            } else if selectedLens == .agent {
-                store.loadRecentSessions()
-            } else if selectedLens == .brief {
-                markBriefSeen()
-            }
-        }
-        .onChange(of: store.work?.latestAgentEvent?.eventId) {
+        .onChange(of: appStore.state.work.work?.latestAgentEvent?.eventId) {
             if selectedLens == .work { markAgentUpdateSeen() }
         }
-        .onChange(of: store.brief?.generatedAt) {
+        .onChange(of: brief.brief?.generatedAt) {
             if selectedLens == .brief { markBriefSeen() }
         }
     }
 
-    private var lensPicker: some View {
-        Picker("视图", selection: Binding(
-            get: { selectedLens },
-            set: { selectedLens = $0 }
-        )) {
-            ForEach(PanelLens.allCases) { lens in
-                HStack(spacing: 5) {
-                    Text(lens.title)
-                    if lens == .work, hasUnreadAgentUpdate {
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 5, height: 5)
-                    }
-                    if lens == .brief, hasUnreadBrief {
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 5, height: 5)
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Morning Brief")
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 4)
+                .padding(.top, 8)
+
+            VStack(spacing: 4) {
+                ForEach(PanelLens.allCases) { lens in
+                    GlassSidebarTab(
+                        lens: lens,
+                        selected: selectedLens == lens,
+                        showDot: (lens == .work && hasUnreadAgentUpdate)
+                            || (lens == .brief && hasUnreadBrief)
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            appStore.send(.setLens(lens))
+                        }
                     }
                 }
-                .tag(lens)
             }
+
+            Spacer(minLength: 0)
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .accessibilityLabel("在工作台账、Agent 和晨报之间切换")
+        .padding(12)
+    }
+
+    @ViewBuilder
+    private var detailPane: some View {
+        noticeBanner
+        switch selectedLens {
+        case .work:
+            WorkLedgerView(appStore: appStore)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear { appStore.send(.work(.onAppear)) }
+        case .agent:
+            dateMetaRow
+            AgentChatView(appStore: appStore)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .brief:
+            dateMetaRow
+            Group {
+                if hasContent {
+                    contentScroll
+                } else {
+                    emptyState
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            footer
+        }
+    }
+
+    private func handleLensAppear() {
+        switch selectedLens {
+        case .work:
+            appStore.send(.work(.onAppear))
+            markAgentUpdateSeen()
+        case .agent:
+            appStore.send(.brief(.syncDateFromWork(appStore.state.work.selectedDate)))
+            appStore.send(.agent(.onAppear))
+        case .brief:
+            appStore.send(.brief(.syncDateFromWork(appStore.state.work.selectedDate)))
+            appStore.send(.brief(.onAppear))
+            markBriefSeen()
+        }
     }
 
     private var hasUnreadAgentUpdate: Bool {
-        guard let eventID = store.work?.latestAgentEvent?.eventId else { return false }
+        guard let eventID = appStore.state.work.work?.latestAgentEvent?.eventId else { return false }
         return eventID != lastSeenAgentEventID
     }
 
     private func markAgentUpdateSeen() {
-        if let eventID = store.work?.latestAgentEvent?.eventId {
+        if let eventID = appStore.state.work.work?.latestAgentEvent?.eventId {
             lastSeenAgentEventID = eventID
         }
     }
@@ -243,64 +273,35 @@ struct MenuBarPanelView: View {
     /// A fresh brief the user hasn't opened yet — identified by its generation
     /// timestamp so a re-synthesized brief re-flags. Empty briefs never flag.
     private var hasUnreadBrief: Bool {
-        guard store.isViewingToday,
-              let stamp = store.brief?.generatedAt, !stamp.isEmpty,
+        guard brief.isViewingToday,
+              let stamp = brief.brief?.generatedAt, !stamp.isEmpty,
               hasContent else { return false }
         return stamp != lastSeenBriefStamp
     }
 
     private func markBriefSeen() {
-        if store.isViewingToday, let stamp = store.brief?.generatedAt, !stamp.isEmpty {
+        if brief.isViewingToday, let stamp = brief.brief?.generatedAt, !stamp.isEmpty {
             lastSeenBriefStamp = stamp
         }
     }
 
-    // MARK: Header
-
-    /// Brand + lens switcher on one row so tabs sit with the product name.
-    private var titleBar: some View {
-        HStack(alignment: .center, spacing: DS.Space.sm) {
-            Text("Morning Brief")
-                .font(.headline.weight(.semibold))
-                .lineLimit(1)
-            lensPicker
-                .frame(maxWidth: 260)
-        }
-    }
-
-    /// Compact date + contribution grid (Agent / 晨报). Work lens owns its own chrome with capture.
-    private var dateChrome: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            dateMetaRow
-            WorkActivityHeatmap(
-                selectedDate: store.selectedDate,
-                counts: store.work?.spanActivityCounts(
-                    endingAt: BriefPaths.todayDateString(),
-                    weeks: 26
-                ) ?? [:],
-                preferredWeeks: 18
-            ) { day in
-                store.select(date: day)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 78)
-        }
-    }
-
+    /// Compact date rail for Agent / 晨报 (no commit heatmap).
     private var dateMetaRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(store.displayDate)
+            Text(brief.displayDate)
                 .font(.caption.weight(.semibold))
                 .monospacedDigit()
-            if !store.isViewingToday {
+            if !brief.isViewingToday {
                 Button("今天") {
-                    store.select(date: BriefPaths.todayDateString())
+                    let today = BriefPaths.todayDateString()
+                    appStore.send(.work(.selectDate(today)))
+                    appStore.send(.brief(.selectDate(today)))
                 }
                 .font(.caption2.weight(.semibold))
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 tinyBadge("历史", background: Color.secondary.opacity(0.15))
-            } else if selectedLens == .brief, hasContent && store.isStale {
+            } else if selectedLens == .brief, hasContent && brief.isStale {
                 tinyBadge("陈旧", background: Color.orange.opacity(0.2))
             }
             Spacer(minLength: 0)
@@ -320,9 +321,30 @@ struct MenuBarPanelView: View {
 
     @ViewBuilder
     private var noticeBanner: some View {
-        if let notice = store.notice, !notice.isEmpty {
+        let workNotice = appStore.state.work.notice
+        let workError = appStore.state.work.errorMessage
+        let agentNotice = appStore.state.agent.notice
+        let agentError = appStore.state.agent.errorMessage
+        let notice: String? = {
+            switch selectedLens {
+            case .work: workNotice
+            case .agent: agentNotice
+            case .brief: brief.notice
+            }
+        }()
+        let error: String? = {
+            switch selectedLens {
+            case .work: workError
+            case .agent: agentError
+            case .brief: brief.errorMessage
+            }
+        }()
+        let agentBusy = appStore.state.agent.isSessionLocating
+            || appStore.state.agent.isSessionAnalyzing
+            || appStore.state.agent.isSessionApplying
+        if let notice, !notice.isEmpty {
             HStack(spacing: 6) {
-                if store.isBusy {
+                if brief.isBusy || appStore.state.work.isMutating || agentBusy {
                     ProgressView().controlSize(.small)
                 }
                 Text(notice)
@@ -331,7 +353,7 @@ struct MenuBarPanelView: View {
                     .lineLimit(4)
             }
         }
-        if let error = store.errorMessage, !error.isEmpty {
+        if let error, !error.isEmpty {
             Text(error)
                 .font(.caption)
                 .foregroundStyle(.red)
@@ -358,18 +380,22 @@ struct MenuBarPanelView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if let hero = store.brief?.hero, hero.hasContent {
+                    if let hero = brief.brief?.hero, hero.hasContent {
                         heroBlock(hero, proxy: proxy)
                         if !readableSections.isEmpty {
                             Divider()
-                            disclosure(proxy: proxy)
+                            sectionsList(proxy: proxy)
+                            sourceChips
+                            synthFootnote
                         }
                     } else {
                         sectionsList(proxy: proxy)
                         sourceChips
+                        synthFootnote
                     }
                 }
                 .padding(.bottom, 8)
+                .frame(maxWidth: 820, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
             }
@@ -400,44 +426,6 @@ struct MenuBarPanelView: View {
         }
     }
 
-    // MARK: 全文 disclosure
-
-    @ViewBuilder
-    private func disclosure(proxy: ScrollViewProxy) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button {
-                toggleFull()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isFullExpanded ? 90 : 0))
-                    Text("全文")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text("\(readableSections.count)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isFullExpanded ? "收起全文" : "展开全文")
-
-            if isFullExpanded {
-                VStack(alignment: .leading, spacing: 20) {
-                    sectionsList(proxy: proxy)
-                    sourceChips
-                    synthFootnote
-                }
-                .opacity(fullContentOpacity)
-            }
-        }
-    }
-
     private func sectionsList(proxy: ScrollViewProxy) -> some View {
         let sections = readableSections
         return VStack(alignment: .leading, spacing: DS.Space.md) {
@@ -453,7 +441,7 @@ struct MenuBarPanelView: View {
 
     @ViewBuilder
     private var sourceChips: some View {
-        if let chips = store.run?.sourceChips, !chips.isEmpty {
+        if let chips = brief.run?.sourceChips, !chips.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text("来源")
                     .font(.caption2)
@@ -471,7 +459,7 @@ struct MenuBarPanelView: View {
 
     @ViewBuilder
     private var synthFootnote: some View {
-        if let synth = store.brief?.synthBadge, !synth.isEmpty {
+        if let synth = brief.brief?.synthBadge, !synth.isEmpty {
             Text("合成 \(synth)")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
@@ -482,46 +470,42 @@ struct MenuBarPanelView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            if store.isRefreshing || store.isSynthesizing {
+            if brief.isRefreshing || brief.isSynthesizing {
                 Button(role: .cancel) {
-                    store.cancelPipeline()
+                    appStore.send(.brief(.cancelPipeline))
                 } label: {
-                    Label(store.isSynthesizing ? "合成中… 取消" : "更新中… 取消", systemImage: "stop.circle")
+                    Label(brief.isSynthesizing ? "合成中… 取消" : "更新中… 取消", systemImage: "stop.circle")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.regular)
             } else {
                 Button {
-                    store.refresh()
+                    appStore.send(.brief(.refresh))
                 } label: {
                     Label("刷新", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 .keyboardShortcut("r")
-                .disabled(store.isBusy || !store.isViewingToday)
+                .disabled(brief.isBusy || !brief.isViewingToday)
 
                 Button("合成") {
-                    store.synthesize()
+                    appStore.send(.brief(.synthesize))
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(store.isBusy || !store.isViewingToday)
+                .disabled(brief.isBusy || !brief.isViewingToday)
             }
 
             Spacer()
 
             Menu {
                 Button("Doctor") {
-                    store.doctor()
+                    appStore.send(.brief(.doctor))
                 }
-                .disabled(store.isDoctorRunning)
+                .disabled(brief.isDoctorRunning)
                 Button("打开文件夹") {
-                    store.openFolder()
-                }
-                Divider()
-                Button("退出") {
-                    NSApplication.shared.terminate(nil)
+                    appStore.send(.brief(.openFolder))
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -543,45 +527,10 @@ struct MenuBarPanelView: View {
         }
         guard let sectionId = mustRead.sectionId,
               readableSections.contains(where: { $0.id == sectionId }) else { return }
-        expandFull()
-        // Wait for the expand spring + content fade before scrolling to the target.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                proxy.scrollTo(sectionId, anchor: .top)
-            }
-            highlight(sectionId)
+        withAnimation(.easeInOut(duration: 0.3)) {
+            proxy.scrollTo(sectionId, anchor: .top)
         }
-    }
-
-    private func toggleFull() {
-        isFullExpanded ? collapseFull() : expandFull()
-    }
-
-    private func expandFull() {
-        guard !isFullExpanded else { return }
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-            isFullExpanded = true
-        }
-        // Content opacity lags the row/chevron by ~40ms.
-        fullContentOpacity = 0
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
-            withAnimation(.easeIn(duration: 0.22)) {
-                fullContentOpacity = 1
-            }
-        }
-    }
-
-    private func collapseFull() {
-        guard isFullExpanded else { return }
-        // Fade the content out first, then collapse the container.
-        withAnimation(.easeOut(duration: 0.12)) {
-            fullContentOpacity = 0
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
-            withAnimation(.spring(response: 0.22, dampingFraction: 0.9)) {
-                isFullExpanded = false
-            }
-        }
+        highlight(sectionId)
     }
 
     private func highlight(_ id: String) {

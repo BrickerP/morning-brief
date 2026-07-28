@@ -29,4 +29,5 @@ typecheck-swift:
 
 app:
 	./scripts/build_app.sh
-	open dist/MorningBrief.app
+	# Launch from / so `open` does not stamp Downloads into the app's PWD.
+	cd / && open "$(HOME)/Applications/MorningBrief.app"

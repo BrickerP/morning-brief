@@ -34,3 +34,4 @@ logs/
 packages/morningbrief/.venv
 **/.venv
 **/.venv/**
+.vendor/

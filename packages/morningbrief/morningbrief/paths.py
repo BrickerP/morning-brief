@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 APP_SUPPORT = Path.home() / "Library" / "Application Support" / "MorningBrief"
@@ -13,9 +14,57 @@ WORK_LEDGER_DB = APP_SUPPORT / "work-ledger.sqlite3"
 CONFIG_DIR = Path.home() / ".config" / "morning-brief"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SCHEMAS_DIR = REPO_ROOT / "schemas"
-PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_DIR = Path(__file__).resolve().parent
+PACKAGE_ROOT = PACKAGE_DIR.parent
+
+
+def _resource_root() -> Path:
+    """Directory that holds `skills/` + `schemas/` for this install.
+
+    Preference order:
+    1. ``MORNINGBRIEF_ROOT`` override (App Support wrapper sets this)
+    2. Editable checkout repo root (when running from source tree)
+    3. Application Support runtime (menu-bar / TCC-safe install)
+    4. Packaged schemas next to this module
+    """
+    override = os.environ.get("MORNINGBRIEF_ROOT")
+    if override:
+        return Path(override)
+
+    # Editable: .../packages/morningbrief/morningbrief/paths.py → repo root
+    maybe_repo = Path(__file__).resolve().parents[3]
+    if (
+        (maybe_repo / "skills").is_dir()
+        and (maybe_repo / "schemas").is_dir()
+        and (maybe_repo / "packages" / "morningbrief").is_dir()
+    ):
+        return maybe_repo
+
+    runtime = APP_SUPPORT / "runtime"
+    if (runtime / "skills").is_dir() or (runtime / "schemas").is_dir():
+        return runtime
+
+    if (PACKAGE_DIR / "schemas").is_dir():
+        return PACKAGE_DIR
+
+    return runtime
+
+
+REPO_ROOT = _resource_root()
+
+
+def _schemas_dir() -> Path:
+    for candidate in (
+        REPO_ROOT / "schemas",
+        PACKAGE_DIR / "schemas",
+        APP_SUPPORT / "runtime" / "schemas",
+    ):
+        if candidate.is_dir():
+            return candidate
+    return PACKAGE_DIR / "schemas"
+
+
+SCHEMAS_DIR = _schemas_dir()
 
 
 def brief_dir(date_str: str) -> Path:
@@ -28,13 +77,10 @@ def ensure_app_dirs() -> None:
 
 
 def resolve_python() -> str:
-    # Prefer package venv, then env/python3.
-    # Do NOT Path.resolve() — that follows the venv python symlink to the
-    # base interpreter and drops site-packages.
-    candidates = [
-        PACKAGE_ROOT / ".venv" / "bin" / "python",
-    ]
-    for c in candidates:
-        if c.exists():
-            return str(c)
-    return os.environ.get("MORNINGBRIEF_PYTHON", "python3")
+    """Interpreter that has morningbrief deps.
+
+    Prefer the interpreter currently running this module (App Support venv or
+    editable checkout). Falling back to a bare ``python3`` is what made doctor
+    report missing deps after the TCC-safe install.
+    """
+    return sys.executable

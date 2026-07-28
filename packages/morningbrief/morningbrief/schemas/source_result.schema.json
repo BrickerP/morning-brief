@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://morningbrief.local/schemas/source_result.schema.json",
+  "title": "SourceResult",
+  "type": "object",
+  "required": ["id", "title", "status", "items", "meta"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "title": { "type": "string" },
+    "status": { "enum": ["ok", "empty", "failed", "partial"] },
+    "error": {
+      "type": ["object", "null"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "items": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "children": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status", "item_count"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "enum": ["ok", "empty", "failed", "partial"] },
+          "error": {
+            "type": ["object", "null"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" }
+            },
+            "required": ["code", "message"],
+            "additionalProperties": false
+          },
+          "item_count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "required": ["fetched_at", "duration_ms", "adapter_version"],
+      "properties": {
+        "fetched_at": { "type": "string" },
+        "duration_ms": { "type": "integer", "minimum": 0 },
+        "adapter_version": { "type": "string" },
+        "invocations": { "type": "array" },
+        "parse_mode": { "enum": ["json", "markdown"] }
+      },
+      "additionalProperties": true
+    }
+  }
+}

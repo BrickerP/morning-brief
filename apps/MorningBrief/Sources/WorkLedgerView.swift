@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct WorkLedgerView: View {
-    @EnvironmentObject private var store: BriefStore
+    @ObservedObject var appStore: Store<AppFeature.State, AppFeature.Action>
 
     @State private var captureText = ""
     @State private var progressText = ""
@@ -22,15 +22,15 @@ struct WorkLedgerView: View {
 
     private var selectedItem: WorkItem? {
         guard let selectedItemID else { return nil }
-        return store.work?.allItems.first { $0.id == selectedItemID }
+        return appStore.state.work.work?.allItems.first { $0.id == selectedItemID }
     }
 
     var body: some View {
         Group {
             if let item = selectedItem {
                 // Items only present in recent_history (not today's active list) are read-only.
-                let inTodayItems = store.work?.items.contains { $0.id == item.id } ?? false
-                let readOnly = (store.work?.readOnly ?? !store.isViewingToday) || !inTodayItems
+                let inTodayItems = appStore.state.work.work?.items.contains { $0.id == item.id } ?? false
+                let readOnly = (appStore.state.work.work?.readOnly ?? !appStore.state.work.isViewingToday) || !inTodayItems
                 detailView(item, readOnly: readOnly)
             } else {
                 overview
@@ -43,59 +43,61 @@ struct WorkLedgerView: View {
             // Capture + contribution calendar share one chrome block so the span chart keeps height.
             workTopChrome
 
-            WorkDaySpanChart(spans: store.work?.daySpans() ?? []) { item in
+            WorkDaySpanChart(
+                spans: appStore.state.work.work?.daySpans() ?? [],
+                highlightedItemID: appStore.state.work.highlightedItemID
+            ) { item in
                 selectedItemID = item.id
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
+            .animation(.spring(response: 0.42, dampingFraction: 0.86), value: appStore.state.work.highlightedItemID)
 
-            if store.isViewingToday, store.work?.latestReversibleEvent != nil {
+            if appStore.state.work.isViewingToday, appStore.state.work.work?.latestReversibleEvent != nil {
                 workFooter
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(captureShortcut)
-        .confirmationDialog(
-            "删除这个任务？",
-            isPresented: isDeleteConfirmPresented,
-            titleVisibility: .visible
-        ) {
-            if let item = pendingDeleteItem {
-                Button("删除", role: .destructive) {
-                    applyDelete(item)
-                    pendingDeleteItem = nil
-                }
-                Button("返回", role: .cancel) {
-                    pendingDeleteItem = nil
-                }
-            }
-        } message: {
-            if let item = pendingDeleteItem {
-                Text("「\(item.title)」会从台账视图中移除；事件仍保留且可撤销。")
-            }
+        .onAppear { focusCaptureSoon() }
+        .onChange(of: selectedItemID) { _, itemID in
+            if itemID == nil { focusCaptureSoon() }
         }
-        .onAppear {
-            if store.isViewingToday, !(store.work?.readOnly ?? false) {
-                captureFocused = true
-            }
+        .onChange(of: appStore.state.work.isViewingToday) { _, viewingToday in
+            if viewingToday { focusCaptureSoon() }
+        }
+    }
+
+    /// Cold-start / return-to-overview: focus after the window becomes key.
+    private func focusCaptureSoon() {
+        guard appStore.state.work.isViewingToday,
+              !(appStore.state.work.work?.readOnly ?? false) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            captureFocused = true
         }
     }
 
     private var canSubmitCapture: Bool {
         !captureText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !store.isWorkMutating
+            && !appStore.state.work.isMutating
     }
 
-    /// Shared top plane: date rail + split heatmap / capture that fills the chrome width.
+    /// Shared top plane height — same for today/history so the heatmap doesn't jump.
+    private let workChromeBodyHeight: CGFloat = 88
+    /// Today: chat keeps at least this much; remainder goes to the heatmap.
+    private let workCaptureMinWidth: CGFloat = 168
+    private let workCaptureWidthFraction: CGFloat = 0.40
+
+    /// Date rail + heatmap (/ capture). History → heatmap full-bleed; today → balanced split.
     private var workTopChrome: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(store.displayDate)
+                Text(appStore.state.work.displayDate)
                     .font(.caption.weight(.semibold))
                     .monospacedDigit()
-                if !store.isViewingToday {
+                if !appStore.state.work.isViewingToday {
                     Button("今天") {
-                        store.select(date: BriefPaths.todayDateString())
+                        appStore.send(.work(.selectDate(BriefPaths.todayDateString())))
                     }
                     .font(.caption2.weight(.semibold))
                     .buttonStyle(.plain)
@@ -110,38 +112,40 @@ struct WorkLedgerView: View {
                 Spacer(minLength: 0)
             }
 
-            HStack(alignment: .top, spacing: DS.Space.sm) {
-                WorkActivityHeatmap(
-                    selectedDate: store.selectedDate,
-                    counts: store.work?.spanActivityCounts(
-                        endingAt: BriefPaths.todayDateString(),
-                        weeks: 26
-                    ) ?? [:],
-                    preferredWeeks: store.isViewingToday ? 14 : 20
-                ) { day in
-                    store.select(date: day)
-                }
-                .frame(maxWidth: .infinity)
-                .layoutPriority(store.isViewingToday ? 1.15 : 1)
-
-                if store.isViewingToday {
-                    captureComposer
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .layoutPriority(1)
+            GeometryReader { geo in
+                let gap = DS.Space.sm
+                if appStore.state.work.isViewingToday {
+                    let chatWidth = min(
+                        max(workCaptureMinWidth, geo.size.width * workCaptureWidthFraction),
+                        geo.size.width * 0.48
+                    )
+                    let heatWidth = max(0, geo.size.width - chatWidth - gap)
+                    HStack(alignment: .top, spacing: gap) {
+                        activityHeatmap
+                            .frame(width: heatWidth, height: geo.size.height)
+                        captureComposer
+                            .frame(width: chatWidth, height: geo.size.height)
+                    }
+                } else {
+                    activityHeatmap
+                        .frame(width: geo.size.width, height: geo.size.height)
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: store.isViewingToday ? 92 : 78)
+            .frame(height: workChromeBodyHeight)
         }
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-                .fill(DS.Palette.cardFill)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: DS.Radius.md, style: .continuous)
-                .strokeBorder(DS.Palette.cardStroke, lineWidth: 1)
+        .glassPanel()
+    }
+
+    private var activityHeatmap: some View {
+        WorkActivityHeatmap(
+            selectedDate: appStore.state.work.selectedDate,
+            counts: appStore.state.work.spanActivityCounts,
+            preferredWeeks: 18
+        ) { day in
+            appStore.send(.work(.selectDate(day)))
         }
     }
 
@@ -153,11 +157,11 @@ struct WorkLedgerView: View {
                 .font(.callout)
                 .focused($captureFocused)
                 .onSubmit(capture)
-                .disabled(store.isWorkMutating)
+                .disabled(appStore.state.work.isMutating)
                 .accessibilityLabel("快速记录工作")
                 .accessibilityHint("输入标题后回车或点发送")
                 .onChange(of: captureText) {
-                    if !store.isWorkMutating {
+                    if !appStore.state.work.isMutating {
                         captureIdempotencyKey = nil
                     }
                 }
@@ -175,6 +179,10 @@ struct WorkLedgerView: View {
         }
         .padding(DS.Space.sm)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            captureFocused = true
+        }
         .background(
             RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
                 .fill(Color.primary.opacity(0.04))
@@ -185,13 +193,14 @@ struct WorkLedgerView: View {
                     captureFocused ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.06),
                     lineWidth: 1
                 )
+                .allowsHitTesting(false)
         }
     }
 
     /// Hidden ⌘N shortcut that focuses the quick-capture field.
     @ViewBuilder
     private var captureShortcut: some View {
-        if store.isViewingToday {
+        if appStore.state.work.isViewingToday {
             Button {
                 captureFocused = true
             } label: { EmptyView() }
@@ -203,22 +212,53 @@ struct WorkLedgerView: View {
         }
     }
 
-    private var isDeleteConfirmPresented: Binding<Bool> {
-        Binding(
-            get: { pendingDeleteItem != nil },
-            set: { if !$0 { pendingDeleteItem = nil } }
+    /// Inline delete confirm — avoids a system sheet interrupting the focused flow.
+    private func deleteConfirmBanner(_ item: WorkItem) -> some View {
+        VStack(alignment: .leading, spacing: DS.Space.xs) {
+            Text("删除这个任务？")
+                .font(.caption.weight(.semibold))
+            Text("「\(item.title)」会从台账视图中移除；事件仍保留且可撤销。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: DS.Space.sm) {
+                Button("返回") {
+                    pendingDeleteItem = nil
+                }
+                .buttonStyle(.borderless)
+                Spacer(minLength: 0)
+                Button("删除", role: .destructive) {
+                    applyDelete(item)
+                    pendingDeleteItem = nil
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.small)
+                .disabled(appStore.state.work.isMutating)
+            }
+        }
+        .padding(DS.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                .fill(Color.red.opacity(0.08))
         )
+        .overlay {
+            RoundedRectangle(cornerRadius: DS.Radius.sm, style: .continuous)
+                .strokeBorder(Color.red.opacity(0.28), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
     }
 
     private var workFooter: some View {
         HStack {
             Spacer()
-            if let event = store.work?.latestReversibleEvent {
+            if let event = appStore.state.work.work?.latestReversibleEvent {
                 Button("撤销上次更新") {
-                    store.undo(eventID: event.eventId)
+                    appStore.send(.work(.undo(eventID: event.eventId)))
                 }
                 .buttonStyle(.borderless)
-                .disabled(store.isWorkMutating)
+                .disabled(appStore.state.work.isMutating)
                 .accessibilityHint("追加一条撤销事件，不删除历史记录")
             }
         }
@@ -258,7 +298,7 @@ struct WorkLedgerView: View {
                                 Label("编辑", systemImage: "pencil")
                             }
                             .buttonStyle(.borderless)
-                            .disabled(store.isWorkMutating)
+                            .disabled(appStore.state.work.isMutating)
                             .accessibilityHint("修改任务标题和说明")
                         }
                     }
@@ -285,7 +325,7 @@ struct WorkLedgerView: View {
                             }
                             .menuStyle(.borderlessButton)
                             .fixedSize()
-                            .disabled(store.isWorkMutating)
+                            .disabled(appStore.state.work.isMutating)
                         }
                         if let duration = item.wallClockDurationLabel {
                             Text(duration)
@@ -296,7 +336,7 @@ struct WorkLedgerView: View {
                 }
             }
 
-            if let span = store.work?.daySpans().first(where: { $0.id == item.id }) {
+            if let span = appStore.state.work.work?.daySpans().first(where: { $0.id == item.id }) {
                 daySpanMiniBar(span)
             }
 
@@ -322,80 +362,64 @@ struct WorkLedgerView: View {
                         let idempotencyKey = progressKey(for: item.id)
                         progressIdempotencyKey = idempotencyKey
                         progressIdempotencyItemID = item.id
-                        store.appendProgress(
+                        appStore.send(.work(.appendProgress(
                             itemID: item.id,
                             text: text,
                             version: item.version,
                             idempotencyKey: idempotencyKey
-                        ) {
-                            if progressText.trimmingCharacters(in: .whitespacesAndNewlines) == text {
-                                progressText = ""
-                                progressIdempotencyKey = nil
-                                progressIdempotencyItemID = nil
-                            }
+                        )))
+                        if progressText.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+                            progressText = ""
+                            progressIdempotencyKey = nil
+                            progressIdempotencyItemID = nil
                         }
                     }
-                    .disabled(store.isWorkMutating)
+                    .disabled(appStore.state.work.isMutating)
                     .accessibilityLabel("追加工作进展")
                     .onChange(of: progressText) {
-                        if !store.isWorkMutating {
+                        if !appStore.state.work.isMutating {
                             progressIdempotencyKey = nil
                             progressIdempotencyItemID = nil
                         }
                     }
 
-                HStack(spacing: DS.Space.sm) {
-                    if item.status == .pending || item.status == .inProgress {
-                        Button("完成") {
-                            applyStatus(item, .completed)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(store.isWorkMutating)
+                if pendingDeleteItem?.id == item.id {
+                    deleteConfirmBanner(item)
+                } else {
+                    HStack(spacing: DS.Space.sm) {
+                        if item.status == .pending || item.status == .inProgress {
+                            Button("完成") {
+                                applyStatus(item, .completed)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(appStore.state.work.isMutating)
 
-                        Button("删除…") {
-                            pendingDeleteItem = item
+                            Button("删除…") {
+                                pendingDeleteItem = item
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(appStore.state.work.isMutating)
+                            .accessibilityHint("从台账视图移除，可撤销")
                         }
-                        .buttonStyle(.borderless)
-                        .disabled(store.isWorkMutating)
-                        .accessibilityHint("从台账视图移除，可撤销")
-                    }
 
-                    Spacer()
+                        Spacer()
 
-                    if let event = item.events.last(where: {
-                        $0.kind != "reverted"
-                            && !item.isEventReverted($0)
-                    }) {
-                        Button("撤销此变更") {
-                            store.undo(eventID: event.eventId)
+                        if let event = item.events.last(where: {
+                            $0.kind != "reverted"
+                                && !item.isEventReverted($0)
+                        }) {
+                            Button("撤销此变更") {
+                                appStore.send(.work(.undo(eventID: event.eventId)))
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(appStore.state.work.isMutating)
                         }
-                        .buttonStyle(.borderless)
-                        .disabled(store.isWorkMutating)
                     }
                 }
             } else {
                 Label("历史记录只读", systemImage: "lock")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-        }
-        .confirmationDialog(
-            "删除这个任务？",
-            isPresented: isDeleteConfirmPresented,
-            titleVisibility: .visible
-        ) {
-            if let item = pendingDeleteItem {
-                Button("删除", role: .destructive) {
-                    applyDelete(item)
-                    pendingDeleteItem = nil
-                }
-                Button("返回", role: .cancel) {
-                    pendingDeleteItem = nil
-                }
-            }
-        } message: {
-            if let item = pendingDeleteItem {
-                Text("「\(item.title)」会从台账视图中移除；事件仍保留且可撤销。")
             }
         }
         .background(
@@ -412,17 +436,19 @@ struct WorkLedgerView: View {
     }
 
     private func applyStatus(_ item: WorkItem, _ status: WorkStatus) {
-        store.setWorkStatus(itemID: item.id, status: status, version: item.version) {
-            if status == .completed {
-                selectedItemID = nil
-            }
+        appStore.send(.work(.setStatus(itemID: item.id, status: status, version: item.version)))
+        if status == .completed {
+            selectedItemID = nil
         }
     }
 
     private func applyDelete(_ item: WorkItem) {
-        store.deleteWork(itemID: item.id, version: item.version) {
-            selectedItemID = nil
-        }
+        appStore.send(.work(.deleteItem(
+            itemID: item.id,
+            version: item.version,
+            idempotencyKey: "ui:delete:\(item.id):\(item.version)"
+        )))
+        selectedItemID = nil
     }
 
     private func editForm(_ item: WorkItem) -> some View {
@@ -471,7 +497,7 @@ struct WorkLedgerView: View {
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(
-                    store.isWorkMutating
+                    appStore.state.work.isMutating
                         || editTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
             }
@@ -561,7 +587,7 @@ struct WorkLedgerView: View {
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
-                    .disabled(store.isWorkMutating)
+                    .disabled(appStore.state.work.isMutating)
                 }
             }
             if editingProgressEventID == event.eventId, !readOnly {
@@ -575,7 +601,7 @@ struct WorkLedgerView: View {
                     Button("保存") { saveProgressEditing(item, event: event) }
                         .buttonStyle(.borderedProminent)
                         .disabled(
-                            store.isWorkMutating
+                            appStore.state.work.isMutating
                                 || editProgressText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         )
                 }
@@ -611,15 +637,14 @@ struct WorkLedgerView: View {
         let key = progressEditIdempotencyKey
             ?? "ui:note-edit:\(item.id):\(event.eventId):\(UUID().uuidString)"
         progressEditIdempotencyKey = key
-        store.editProgress(
+        appStore.send(.work(.editProgress(
             itemID: item.id,
             eventID: event.eventId,
             text: text,
             version: item.version,
             idempotencyKey: key
-        ) {
-            cancelProgressEditing()
-        }
+        )))
+        cancelProgressEditing()
     }
 
     private func navigationTitle(_ backTitle: String, title: String, action: @escaping () -> Void) -> some View {
@@ -643,11 +668,10 @@ struct WorkLedgerView: View {
         guard !text.isEmpty else { return }
         let idempotencyKey = captureIdempotencyKey ?? "ui:add:\(UUID().uuidString)"
         captureIdempotencyKey = idempotencyKey
-        store.captureWork(title: text, idempotencyKey: idempotencyKey) {
-            if captureText.trimmingCharacters(in: .whitespacesAndNewlines) == text {
-                captureText = ""
-                captureIdempotencyKey = nil
-            }
+        appStore.send(.work(.capture(title: text, idempotencyKey: idempotencyKey)))
+        if captureText.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+            captureText = ""
+            captureIdempotencyKey = nil
         }
     }
 
@@ -679,19 +703,18 @@ struct WorkLedgerView: View {
             editIdempotencyKey = idempotencyKey
             editIdempotencyItemID = item.id
         }
-        store.editWork(
+        appStore.send(.work(.editItem(
             itemID: item.id,
             title: title,
             detail: detail,
             version: item.version,
             idempotencyKey: idempotencyKey
-        ) {
-            cancelEditing()
-        }
+        )))
+        cancelEditing()
     }
 
     private func resetEditIdempotencyIfPossible() {
-        guard !store.isWorkMutating else { return }
+        guard !appStore.state.work.isMutating else { return }
         editIdempotencyKey = nil
     }
 

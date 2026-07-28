@@ -1,16 +1,18 @@
-# MorningBrief (menu bar)
+# MorningBrief (desktop)
 
-SwiftUI `MenuBarExtra` app. Prefer building via repo root:
+SwiftUI `WindowGroup` desktop app with Dock icon. Prefer building via repo root:
 
 ```bash
 ./scripts/bootstrap.sh
 # or
-./scripts/build_app.sh && open dist/MorningBrief.app
+./scripts/build_app.sh && open ~/Applications/MorningBrief.app
 ```
+
+The app is always installed to `~/Applications` (never left under Downloads).
 
 `briefctl` discovery order: `MORNINGBRIEF_BRIEFCTL` → `~/Library/Application Support/MorningBrief/briefctl.path` → `~/.local/bin/briefctl` → `PATH`.
 
-The panel has three lenses:
+Sidebar lenses (⌘1 / ⌘2 / ⌘3):
 
 - `工作台账`: capture, edit, progress, status, history, undo. Quick-capture
   autofocuses; ⌘N refocuses it; Esc backs out of an item/history.
