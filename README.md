@@ -1,5 +1,7 @@
 # Morning Brief
 
+[![CI](https://github.com/BrickerP/morning-brief/actions/workflows/ci.yml/badge.svg)](https://github.com/BrickerP/morning-brief/actions/workflows/ci.yml)
+
 本地桌面晨报：Python `briefctl` 抓取 →（可选）Cursor `agent` 合成 →
 SwiftUI 桌面 App 阅读、工作台账与 Claude Session 回传。
 
