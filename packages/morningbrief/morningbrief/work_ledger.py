@@ -78,38 +78,62 @@ class WorkLedger:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
+        # Explicit busy timeout (ms): connect(timeout=...) alone still lost races
+        # when concurrent CLI processes initialized without the operation lock.
+        conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
+        mode = conn.execute("PRAGMA journal_mode").fetchone()
+        if mode is None or str(mode[0]).lower() != "wal":
+            conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = FULL")
         return conn
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        """Commit/rollback and always close (stdlib context does not close)."""
+        conn = self._connect()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
+
     def _initialize(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS work_events (
-                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_id TEXT NOT NULL UNIQUE,
-                    item_id TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    actor TEXT NOT NULL,
-                    occurred_at TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    reason TEXT,
-                    evidence_json TEXT NOT NULL,
-                    idempotency_key TEXT UNIQUE,
-                    target_event_id TEXT
+        # Serialize schema/WAL setup with mutations; unlocked init raced concurrent
+        # `briefctl todo add` subprocesses and raised OperationalError: database is locked.
+        with self._operation_lock():
+            with self._connection() as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS work_events (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        event_id TEXT NOT NULL UNIQUE,
+                        item_id TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        actor TEXT NOT NULL,
+                        occurred_at TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        reason TEXT,
+                        evidence_json TEXT NOT NULL,
+                        idempotency_key TEXT UNIQUE,
+                        target_event_id TEXT
+                    )
+                    """
                 )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_work_events_time "
-                "ON work_events(occurred_at, sequence)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_work_events_item "
-                "ON work_events(item_id, sequence)"
-            )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_work_events_time "
+                    "ON work_events(occurred_at, sequence)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_work_events_item "
+                    "ON work_events(item_id, sequence)"
+                )
 
     @contextmanager
     def _operation_lock(self) -> Iterator[None]:
@@ -365,7 +389,7 @@ class WorkLedger:
         if days < 1:
             raise LedgerError("days must be at least 1")
         with self._operation_lock():
-            with self._connect() as conn:
+            with self._connection() as conn:
                 snapshot = self._snapshot(conn, selected_day, days)
             if publish:
                 atomic_write_json(self.briefs_dir / selected_day / "work.json", snapshot)
@@ -390,7 +414,7 @@ class WorkLedger:
         clean_reason = self._clean_reason(reason)
         clean_evidence = self._clean_evidence(evidence)
         with self._operation_lock():
-            with self._connect() as conn:
+            with self._connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 duplicate = False
                 if idempotency_key:
@@ -514,7 +538,7 @@ class WorkLedger:
                     projected = self._project_items(events).get(actual_item_id)
                     item = self._public_item(projected) if projected is not None else None
             today = datetime.now(self.timezone).date().isoformat()
-            with self._connect() as conn:
+            with self._connection() as conn:
                 snapshot = self._snapshot(conn, today)
             atomic_write_json(self.briefs_dir / today / "work.json", snapshot)
         return {"event": event, "item": item, "duplicate": duplicate}
@@ -629,7 +653,7 @@ class WorkLedger:
     ) -> dict[str, Any]:
         """Append a tombstoned event; item stays in projector, filtered from publish."""
         # Eligibility checked against current projection inside a short read.
-        with self._connect() as conn:
+        with self._connection() as conn:
             current = self._project_items(self._events(conn)).get(item_id)
         if current is None:
             raise NotFoundError(f"work item not found: {item_id}")
@@ -658,7 +682,7 @@ class WorkLedger:
     ) -> dict[str, Any]:
         self._validate_actor(actor)
         if idempotency_key:
-            with self._connect() as conn:
+            with self._connection() as conn:
                 existing = conn.execute(
                     "SELECT * FROM work_events WHERE idempotency_key = ?",
                     (idempotency_key,),
@@ -679,7 +703,7 @@ class WorkLedger:
                     occurred_at=occurred_at,
                     target_event_id=requested_target,
                 )
-        with self._connect() as conn:
+        with self._connection() as conn:
             events = self._events(conn)
         already_reverted = {
             event["target_event_id"] for event in events if event["kind"] == "reverted"
