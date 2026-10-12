@@ -25,7 +25,7 @@ open:
 	./bin/briefctl open
 
 typecheck-swift:
-	cd apps/MorningBrief && swiftc -typecheck -sdk $$(xcrun --show-sdk-path) -target arm64-apple-macos14.0 Sources/*.swift
+	cd apps/MorningBrief && swiftc -typecheck -parse-as-library -sdk $$(xcrun --show-sdk-path) -target arm64-apple-macos14.0 $$(find Sources -name '*.swift' | sort)
 
 app:
 	./scripts/build_app.sh
