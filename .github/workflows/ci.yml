@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: packages/morningbrief/pyproject.toml
+      - name: Install
+        run: python -m pip install -e packages/morningbrief pytest
+      - name: Byte-compile
+        run: python -m compileall -q packages/morningbrief/morningbrief scripts tests
+      - name: Test
+        working-directory: packages/morningbrief
+        run: python -m pytest -q
+
+  swift:
+    name: Swift typecheck + runner smoke (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Typecheck app sources
+        run: make typecheck-swift
+      - name: Runner smoke test
+        run: ./scripts/test_swift_runner.sh
