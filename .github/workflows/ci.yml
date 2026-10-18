@@ -22,7 +22,7 @@ jobs:
       matrix:
         python-version: ["3.11", "3.13"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
@@ -40,7 +40,7 @@ jobs:
     name: Swift typecheck + runner smoke (macOS)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Typecheck app sources
         run: make typecheck-swift
       - name: Runner smoke test
